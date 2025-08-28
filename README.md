@@ -4,7 +4,7 @@ Currently loose experiments which will turn in a fully working MLOps pipeline on
 
 TODO list:
 * Make Vault not in-memory but instead use Docker volume for persistent key storage.
-* InfluxDB experiments
+* TimescaleDB from experiment to working transform pipeline.
 * ...
 * The rest of the pipeline.
 * Actual machine learning.

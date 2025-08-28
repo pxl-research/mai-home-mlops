@@ -1,40 +1,95 @@
 import os
+import psycopg2
 import time
-from influxdb_client import InfluxDBClient, Point, WritePrecision
-from influxdb_client.client.write_api import SYNCHRONOUS
+import socket
+from urllib.parse import urlparse
+
+def wait_for_postgres(host, port, timeout=30):
+    """Wait for the PostgreSQL database to be ready."""
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        try:
+            with socket.create_connection((host, port), timeout=1):
+                return True
+        except (socket.error, ConnectionRefusedError):
+            time.sleep(1)
+    raise TimeoutError(f"Cannot connect to PostgreSQL at {host}:{port}")
 
 # Get environment variables
-url = os.getenv('INFLUXDB_URL')
-token = os.getenv('INFLUXDB_TOKEN')
-org = os.getenv('INFLUXDB_ORG')
-bucket = os.getenv('INFLUXDB_BUCKET') # Retrieve the bucket name from the environment variable
+url = os.getenv("POSTGRES_URL")
 
-# Ensure all necessary variables are set
-if not all([url, token, org, bucket]):
-    raise ValueError("Missing one or more required environment variables: INFLUXDB_URL, INFLUXDB_TOKEN, INFLUXDB_ORG, INFLUXDB_BUCKET")
+# Ensure the URL is set
+if not url:
+    raise ValueError("Missing POSTGRES_URL environment variable")
 
-print(f"Connecting to InfluxDB at {url}...")
+# Parse URL for connection details
+parsed = urlparse(url)
+host = parsed.hostname
+port = parsed.port or 5432
+user = parsed.username
+password = parsed.password
+dbname = parsed.path.strip("/")
 
-client = InfluxDBClient(url=url, token=token, org=org)
-write_api = client.write_api(write_options=SYNCHRONOUS)
+# Initialize conn to None to prevent NameError in the finally block
+conn = None
 
-point = Point("mem").tag("host", "server1").field("used_percent", 23.43).time(time.time_ns(), WritePrecision.NS)
-
-print("Writing data point...")
 try:
-    write_api.write(bucket=bucket, org=org, record=point)
-    print("Data point written successfully.")
-except Exception as e:
-    print(f"Error writing data: {e}")
-    # You might want to retry or handle the error gracefully here
+    print(f"Waiting for PostgreSQL at {host}:{port}...")
+    wait_for_postgres(host, port)
+    print("PostgreSQL is ready.")
+
+    # Connect to the database
+    conn = psycopg2.connect(
+        host=host,
+        port=port,
+        user=user,
+        password=password,
+        dbname=dbname
+    )
+    cursor = conn.cursor()
+    print("Connected to PostgreSQL successfully.")
+
+    # Create table and hypertable if they don't exist
+    print("Creating table and hypertable...")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS mem (
+            time TIMESTAMPTZ NOT NULL,
+            host TEXT NOT NULL,
+            used_percent DOUBLE PRECISION
+        );
+    """)
+    cursor.execute("SELECT create_hypertable('mem', 'time', if_not_exists => TRUE);")
+    conn.commit()
+    print("Table and hypertable are ready.")
+
+    # Insert a data point
+    used_percent = 23.43
+    host_name = "server1"
     
-print("Querying data...")
-query_api = client.query_api()
-query = f'from(bucket: "{bucket}") |> range(start: -1h) |> filter(fn: (r) => r["_measurement"] == "mem")'
-tables = query_api.query(query, org=org)
+    print("Writing data point...")
+    cursor.execute(
+        "INSERT INTO mem (time, host, used_percent) VALUES (NOW(), %s, %s);",
+        (host_name, used_percent)
+    )
+    conn.commit()
+    print("Data point written successfully.")
 
-for table in tables:
-  for record in table.records:
-    print(record)
+    # Query the data
+    sql_query = "SELECT time, host, used_percent FROM mem WHERE time >= NOW() - INTERVAL '1 hour' ORDER BY time DESC;"
+    print("Querying data with SQL...")
+    cursor.execute(sql_query)
+    
+    # Print results
+    for row in cursor.fetchall():
+        print(row)
+    print("Query finished.")
 
-print("Script finished.")
+except psycopg2.OperationalError as e:
+    print(f"Error connecting to the database: {e}")
+except Exception as e:
+    print(f"An error occurred: {e}")
+finally:
+    # Close the connection
+    if conn:
+        conn.close()
+        print("Database connection closed.")

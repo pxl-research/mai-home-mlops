@@ -1,0 +1,26 @@
+# docker-compose down
+# docker-compose up --build
+
+services:
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: timescaledb
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=mydb
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+  
+  app:
+    build: .
+    container_name: transform_postgres
+    environment:
+      - POSTGRES_URL=postgresql://postgres:postgres@postgres:5432/mydb
+    depends_on:
+      - postgres
+
+volumes:
+  db_data:
