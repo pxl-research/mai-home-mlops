@@ -1,1 +1,3 @@
-psycopg2-binary
+influxdb3-python
+requests
+pandas

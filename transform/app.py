@@ -1,95 +1,51 @@
 import os
-import psycopg2
+from datetime import datetime, timezone
 import time
-import socket
-from urllib.parse import urlparse
+import requests
+from influxdb_client_3 import InfluxDBClient3, Point
+import pandas as pd
 
-def wait_for_postgres(host, port, timeout=30):
-    """Wait for the PostgreSQL database to be ready."""
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        try:
-            with socket.create_connection((host, port), timeout=1):
-                return True
-        except (socket.error, ConnectionRefusedError):
-            time.sleep(1)
-    raise TimeoutError(f"Cannot connect to PostgreSQL at {host}:{port}")
+# Environment variables
+host = os.getenv("INFLUXDB_URL")
+token = os.getenv("INFLUXDB_TOKEN")
+database = os.getenv("INFLUXDB_BUCKET")
 
-# Get environment variables
-url = os.getenv("POSTGRES_URL")
+if not all([host, token, database]):
+    raise ValueError("Missing InfluxDB configuration environment variables")
 
-# Ensure the URL is set
-if not url:
-    raise ValueError("Missing POSTGRES_URL environment variable")
+# Connect to InfluxDB
+client = InfluxDBClient3(
+    host=host,
+    database=database,
+    token=token
+)
 
-# Parse URL for connection details
-parsed = urlparse(url)
-host = parsed.hostname
-port = parsed.port or 5432
-user = parsed.username
-password = parsed.password
-dbname = parsed.path.strip("/")
+# Write a sample point (synchronously, but async is also possible)
+point = Point("census") \
+    .tag("location", "Brussels") \
+    .field("ant", 14) \
+    .field("bees", 99) \
+    .time(datetime.now(timezone.utc).isoformat())
+client.write(point)
+print("Data is written to database.")
 
-# Initialize conn to None to prevent NameError in the finally block
-conn = None
+# Prepare SQL query
+query = '''
+    SELECT "location", "ant", "bees", "time"
+    FROM "census"
+    WHERE time >= now() - interval '7 days'
+    ORDER BY time ASC
+'''
 
-try:
-    print(f"Waiting for PostgreSQL at {host}:{port}...")
-    wait_for_postgres(host, port)
-    print("PostgreSQL is ready.")
+# Run the query and get the result as a pyarrow.Table
+result = client.query(query)
+# Convert to pd.DataFrame
+df = result.to_pandas()
 
-    # Connect to the database
-    conn = psycopg2.connect(
-        host=host,
-        port=port,
-        user=user,
-        password=password,
-        dbname=dbname
-    )
-    cursor = conn.cursor()
-    print("Connected to PostgreSQL successfully.")
+# Convert time column from ns to human readable datetime
+df["time"] = pd.to_datetime(df["time"], unit="ns")
 
-    # Create table and hypertable if they don't exist
-    print("Creating table and hypertable...")
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS mem (
-            time TIMESTAMPTZ NOT NULL,
-            host TEXT NOT NULL,
-            used_percent DOUBLE PRECISION
-        );
-    """)
-    cursor.execute("SELECT create_hypertable('mem', 'time', if_not_exists => TRUE);")
-    conn.commit()
-    print("Table and hypertable are ready.")
 
-    # Insert a data point
-    used_percent = 23.43
-    host_name = "server1"
-    
-    print("Writing data point...")
-    cursor.execute(
-        "INSERT INTO mem (time, host, used_percent) VALUES (NOW(), %s, %s);",
-        (host_name, used_percent)
-    )
-    conn.commit()
-    print("Data point written successfully.")
-
-    # Query the data
-    sql_query = "SELECT time, host, used_percent FROM mem WHERE time >= NOW() - INTERVAL '1 hour' ORDER BY time DESC;"
-    print("Querying data with SQL...")
-    cursor.execute(sql_query)
-    
-    # Print results
-    for row in cursor.fetchall():
-        print(row)
-    print("Query finished.")
-
-except psycopg2.OperationalError as e:
-    print(f"Error connecting to the database: {e}")
-except Exception as e:
-    print(f"An error occurred: {e}")
-finally:
-    # Close the connection
-    if conn:
-        conn.close()
-        print("Database connection closed.")
+print("---")
+print(df.to_string(index=False))
+print("---")
