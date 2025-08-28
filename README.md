@@ -5,6 +5,7 @@ Currently loose experiments which will turn in a fully working MLOps pipeline on
 TODO list:
 * Make Vault not in-memory but instead use Docker volume for persistent key storage.
 * TimescaleDB from experiment to working transform pipeline.
+    * https://www.tigerdata.com/learn/time-series-analysis-and-forecasting-with-python
 * ...
 * The rest of the pipeline.
 * Actual machine learning.
