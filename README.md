@@ -44,7 +44,7 @@ Install DVC for version control for data.
 wget https://downloads.dvc.org/deb/pool/stable/d/dv/dvc_3.63.0_amd64.deb -O dvc.deb && sudo dpkg -i dvc.deb
 ```
 
-### Kubernetes & Kubeflow
+### Pipeline orchestration
 
 #### minikube
 
@@ -54,20 +54,6 @@ wget https://downloads.dvc.org/deb/pool/stable/d/dv/dvc_3.63.0_amd64.deb -O dvc.
 curl -LO https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-amd64
 sudo install minikube-linux-amd64 /usr/local/bin/minikube && rm minikube-linux-amd64
 minikube start
-```
-
-#### kubectl
-
-```
-sudo apt install snapd
-sudo snap install kubectl --classic
-alias kubectl="minikube kubectl --"
-```
-
-#### kustomize
-```
-curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"  | bash
-sudo install kustomize /usr/local/bin/kustomize && rm kustomize
 ```
 
 #### Metaflow
@@ -104,6 +90,22 @@ tofu destroy
 ## Appendix: Kubeflow
 Although we do not use Kubeflow due to it being more heavyweight than Metaflow, we provide the following installation guide.
 One can adjust the yaml file in the manifests folder to exclude certain Kubeflow components.
+
+### kubectl
+
+```
+sudo apt install snapd
+sudo snap install kubectl --classic
+alias kubectl="minikube kubectl --"
+```
+
+### kustomize
+```
+curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"  | bash
+sudo install kustomize /usr/local/bin/kustomize && rm kustomize
+```
+
+### Kubeflow
 
 [Install with a single command](https://github.com/kubeflow/manifests?tab=readme-ov-file#install-with-a-single-command)
 ```

@@ -105,7 +105,9 @@ class ForeachFlow(FlowSpec):
         self.next(self.memory_hog)
 
     # @kubernetes(memory=10000) # uncomment for cloud
-    @catch # handle error
+    @catch # handle error and continue
+    # @retry # retry when error
+    # @timeout # step can only run a limited time
     @step
     def memory_hog(self):
         print("Requesting a lot of memory")
