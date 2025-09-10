@@ -26,6 +26,9 @@ add-apt-repository ppa:git-core/ppa
 apt update; apt install git
 ```
 
+### Docker
+[Install Docker on Linux](https://docs.docker.com/engine/install/ubuntu/#install-using-the-repository)
+
 ### Azure CLI
 
 [Install the Azure CLI on Linux](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli-linux?view=azure-cli-latest&pivots=apt)
@@ -67,7 +70,40 @@ curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack
 sudo install kustomize /usr/local/bin/kustomize && rm kustomize
 ```
 
-#### Kubeflow
+#### Metaflow
+```
+pip install metaflow # or: pip install --upgrade metaflow
+metaflow-dev up
+```
+
+## Infrastructure set up
+
+First time initialization:
+
+```
+az login --use-device-code
+az account show --query id --output tsv
+export ARM_SUBSCRIPTION_ID="ENTER YOUR SUBSCRIPTION ID"
+cd src/infrastructure
+tofu init
+```
+
+Add changes in infrastructure:
+
+```
+tofu plan
+tofu apply
+```
+
+Destroy architecture:
+
+```
+tofu destroy
+```
+
+## Appendix: Kubeflow
+Although we do not use Kubeflow due to it being more heavyweight than Metaflow, we provide the following installation guide.
+One can adjust the yaml file in the manifests folder to exclude certain Kubeflow components.
 
 [Install with a single command](https://github.com/kubeflow/manifests?tab=readme-ov-file#install-with-a-single-command)
 ```
@@ -104,30 +140,4 @@ kubectl port-forward svc/istio-ingressgateway -n istio-system 8080:80
 # Go to http://localhost:8080
 
 Log in with the default user's credentials. The default email address is user@example.com, and the default password is 12341234.
-```
-
-
-## Infrastructure set up
-
-First time initialization:
-
-```
-az login --use-device-code
-az account show --query id --output tsv
-export ARM_SUBSCRIPTION_ID="ENTER YOUR SUBSCRIPTION ID"
-cd src/infrastructure
-tofu init
-```
-
-Add changes in infrastructure:
-
-```
-tofu plan
-tofu apply
-```
-
-Destroy architecture:
-
-```
-tofu destroy
 ```
