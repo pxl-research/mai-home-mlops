@@ -3,7 +3,7 @@
 Currently loose experiments which will turn in a fully working MLOps pipeline on Azure taking IaC from Happy@Home when applicable.
 
 TODO list:
-
+* Add Experiment Tracking to flowchart.
 * ONLY USE AZURE BLOB STORAGE OR ADLS FOR BACKUP (save InfluxDB data locally in volume in container in VM and let InfluxDB handle the rest):
 Configuring InfluxDB 3.0 to use Azure Blob Storage as long-term persistence with a local cache in VM for real-time operations is a core feature of its architecture. This is a powerful, hybrid approach that combines the high performance of local storage for recent data with the cost-effective, scalable nature of object storage for historical data.
 https://www.influxdata.com/blog/azure-blob-storage-influxdb/
@@ -20,6 +20,7 @@ influxdb3 serve \
 ```
 Approximately every 10 minutes, the contents of the queryable buffer are persisted to Parquet files in your Azure Blob Storage container.
 
+* For DVC: After your pg_parquet script creates a new Parquet file locally, you can use the DVC Python API to add this file to DVC's tracking system and then push it to your Azure Blob Storage remote. (Given that DVC is initialized as using Azure Blob Storage as a remote backend.)
 
 * Use OpenBao instead of HashiCorp Vault.
 * Make vault not in-memory but instead use Docker volume for persistent key storage.
