@@ -4,11 +4,28 @@ Currently loose experiments which will turn in a fully working MLOps pipeline on
 
 TODO list:
 
-* Use OpenBao instead of Vault.
-* Make Vault not in-memory but instead use Docker volume for persistent key storage.
-* InfluxDB 3 from experiment to working transform pipeline.
+* ONLY USE AZURE BLOB STORAGE OR ADLS FOR BACKUP (save InfluxDB data locally in volume in container in VM and let InfluxDB handle the rest):
+Configuring InfluxDB 3.0 to use Azure Blob Storage as long-term persistence with a local cache in VM for real-time operations is a core feature of its architecture. This is a powerful, hybrid approach that combines the high performance of local storage for recent data with the cost-effective, scalable nature of object storage for historical data.
+https://www.influxdata.com/blog/azure-blob-storage-influxdb/
+Then use DVC on the object store (not in the VM).
+```
+influxdb3 serve \
+    --object-store=azure \
+    --node-id=azure01 \
+    --cluster-id=cluster01 \
+    --wal-flush-interval=1s \
+    --azure-storage-access-key="YOUR_ACCESS_KEY" \
+    --azure-storage-account=influxdb3blobstorage \
+    --bucket=influxdb3-data
+```
+Approximately every 10 minutes, the contents of the queryable buffer are persisted to Parquet files in your Azure Blob Storage container.
+
+
+* Use OpenBao instead of HashiCorp Vault.
+* Make vault not in-memory but instead use Docker volume for persistent key storage.
+* InfluxDB 3 from tutorial to working ingest flow.
 * InfluxDB 3 with Azure Data Lake Storage.
-* FastStream with rabbitmq backend for streaming from IoT to Transform.
+* FastStream with Redis backend for streaming from IoT to ingest flow, simulate this (initial bulk ingest from CSV), then real-time streaming to InfluxDB in local VM storage (async in background to blob storage).
 * ...
 * The rest of the pipeline.
 * Actual machine learning.
