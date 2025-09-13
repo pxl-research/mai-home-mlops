@@ -32,6 +32,7 @@ Approximately every 10 minutes, the contents of the queryable buffer are persist
       dvc_hash TEXT
     );
     
+    -- separate table to keep runs table more lightweight since JSONB can be big
     CREATE TABLE run_details (
       run_id INT PRIMARY KEY REFERENCES runs(run_id) ON DELETE CASCADE,
       training_script_path TEXT NULL,             -- only for manual runs, nullable for auto
