@@ -3,9 +3,8 @@
 Currently loose experiments which will turn in a fully working MLOps pipeline on Azure taking IaC from Happy@Home when applicable.
 
 TODO list:
-* Add Experiment Tracking to flowchart.
 * ONLY USE AZURE BLOB STORAGE OR ADLS FOR BACKUP (save InfluxDB data locally in volume in container in VM and let InfluxDB handle the rest):
-Configuring InfluxDB 3.0 to use Azure Blob Storage as long-term persistence with a local cache in VM for real-time operations is a core feature of its architecture. This is a powerful, hybrid approach that combines the high performance of local storage for recent data with the cost-effective, scalable nature of object storage for historical data.
+Configuring InfluxDB 3.0 to use Azure Blob Storage as long-term persistence with a local cache in VM for real-time operations is a core feature of its architecture. This is a hybrid approach that combines the high performance of local storage for recent data with the cost-effective, scalable nature of object storage for historical data.
 https://www.influxdata.com/blog/azure-blob-storage-influxdb/
 Then use DVC on the object store (not in the VM).
 ```
@@ -21,6 +20,110 @@ influxdb3 serve \
 Approximately every 10 minutes, the contents of the queryable buffer are persisted to Parquet files in your Azure Blob Storage container.
 
 * For DVC: After your pg_parquet script creates a new Parquet file locally, you can use the DVC Python API to add this file to DVC's tracking system and then push it to your Azure Blob Storage remote. (Given that DVC is initialized as using Azure Blob Storage as a remote backend.)
+
+* Model registry and experiment tracking:
+    ```
+    -- generic training runs (experiments or retraining)
+    CREATE TABLE runs (
+      run_id SERIAL PRIMARY KEY,
+      run_type TEXT NOT NULL,          -- ['manual', 'auto_retrain']
+      created_at TIMESTAMP DEFAULT NOW(),
+      git_commit_hash VARCHAR(40),     -- Needs commit (only locally) before saving to database, in production take last saved commit hash from .env file written by CI/CD
+      dvc_hash TEXT
+    );
+    
+    CREATE TABLE run_details (
+      run_id INT PRIMARY KEY REFERENCES runs(run_id) ON DELETE CASCADE,
+      training_script_path TEXT NULL,             -- only for manual runs, nullable for auto
+      scheduled_at TIMESTAMP NULL,                -- only for auto runs, nullable for manual
+
+      train_start_timestamp TIMESTAMP,
+      train_end_timestamp TIMESTAMP,
+      validation_start_timestamp TIMESTAMP NULL,  -- only for manual runs, nullable for auto
+      validation_end_timestamp TIMESTAMP NULL,    -- only for manual runs, nullable for auto
+      test_start_timestamp TIMESTAMP NULL,        -- only for manual runs, nullable for auto
+      test_end_timestamp TIMESTAMP NULL,          -- only for manual runs, nullable for auto
+
+      train_metrics JSONB,                        -- (e.g., {'rmse': 12.5})
+      validation_metrics JSONB NULL,              -- only for manual runs, nullable for auto
+      test_metrics JSONB NULL,                    -- only for manual runs, nullable for auto
+
+      input_features JSONB,                       -- list of feature names
+      target_features JSONB,                      -- list of feature names
+      hyperparameters JSONB,                      -- list of feature names
+      metadata JSONB,                             -- dict of use-case specific metadata, e.g. {"household_id_list": []}
+    );
+
+    -- promoted models
+    CREATE TABLE model_registry (
+      model_id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,                     -- model name
+      type TEXT DEFAULT 'none',               -- ['none', 'predictive_maintainance', ...]
+      stage TEXT DEFAULT 'none',              -- ['none', 'staging', 'production', 'archived']
+      description TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      model_path TEXT,                        -- local or on cloud (prefix gets chosen automatically if local or on cloud and is not stored in database, only the part after)
+
+      run_id INT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE, -- links back to any run (only auto in practice but by design can be auto or manual)
+      deployment_info JSONB                   -- {'endpoint': '...', 'deployed_at': '2025-09-13T12:00'}
+    );
+
+    -- Optional indexes:
+    CREATE INDEX idx_model_registry_type_stage ON model_registry(type, stage);
+    CREATE INDEX idx_runs_created_at ON runs(created_at);
+
+    # Keep only last 5 models per type
+    import os
+    import psycopg2
+    work_environment = os.getenv("WORK_ENVIRONMENT")
+    if work_environment == "production":
+        # Azure Blob client setup
+        from azure.storage.blob import BlobServiceClient
+        connection_string = "<your-azure-blob-connection-string>"
+        container_name = "<your-container-name>"
+        blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+        container_client = blob_service_client.get_container_client(container_name)
+
+    conn = psycopg2.connect("dbname=mlops user=postgres password=secret")
+    cur = conn.cursor()
+
+    # Step 1: Get model paths to delete
+    cur.execute("""
+    WITH to_delete AS (
+        SELECT model_id, model_path
+        FROM model_registry
+        WHERE type = 'predictive_maintainance'
+        ORDER BY created_at DESC
+        OFFSET 5
+    )
+    DELETE FROM model_registry
+    WHERE model_id IN (SELECT model_id FROM to_delete)
+    RETURNING model_path;
+    """)
+
+    paths_to_delete = [row[0] for row in cur.fetchall()]
+
+    # Step 2: Delete files locally (development) or Azure Blob Storage (production)
+    if work_environment == "production":
+        for blob_path in paths_to_delete:
+            try:
+                container_client.delete_blob(blob_path) # TODO: might want to add correct prefix
+                print(f"Deleted Azure blob: {blob_path}")
+            except Exception as e:
+                print(f"Failed to delete blob {blob_path}: {e}")
+    else:
+        for path in paths_to_delete:
+            try:
+                os.remove(path)
+                print(f"Deleted local model: {path}")
+            except FileNotFoundError:
+                print(f"File not found, skipping: {path}")
+
+    conn.commit()
+    cur.close()
+    conn.close()
+    ```
+
 
 * Use OpenBao instead of HashiCorp Vault.
 * Make vault not in-memory but instead use Docker volume for persistent key storage.
