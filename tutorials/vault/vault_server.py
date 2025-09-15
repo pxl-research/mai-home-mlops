@@ -8,30 +8,36 @@ docker pull quay.io/openbao/openbao:2.4.1
 
 docker volume create vault_data
 
-docker run -d --name=prod-vault --cap-add=IPC_LOCK -p 8200:8200 -v vault_data:/vault/file quay.io/openbao/openbao:2.4.1 > /dev/null \
+docker run -d --name=prod-vault \
+  --cap-add=IPC_LOCK \
+  -p 8200:8200 \
+  -v vault_data:/vault/file \
+  -v $(pwd)/config.hcl:/vault/config/config.hcl \
+  quay.io/openbao/openbao:2.4.1 server -config=/vault/config/config.hcl \
 && sleep 5 \
-&& docker logs prod-vault 2>&1 | awk '/Unseal Key:/ {uk = $3} /Root Token:/ {rt = $3; printf "{\n\"unseal_key\": \"%s\",\n\"root_token\": \"%s\"\n}\n", uk, rt; exit}'
+&& docker exec prod-vault env VAULT_ADDR=http://127.0.0.1:8200 \
+   vault operator init -key-shares=1 -key-threshold=1 \
+   | awk '/Unseal Key 1:/ {uk=$4} /Initial Root Token:/ {rt=$4; printf "{\n\"unseal_key\": \"%s\",\n\"root_token\": \"%s\"\n}\n", uk, rt}'
 
 # Output:
 {
-"unseal_key": "J3TCOHtFZ6Zik88Lq/0Gb6oylkfoTkZpmaCEZ96dOxU=",
-"root_token": "s.91QdcVjUTFTcRPjQg2gpXN7z"
+"unseal_key": "EJEvqoIK3CznqnLF6Lxm4Nq0Ea8t8FwvpPNEgbIPJGc=",
+"root_token": "s.Ba5vFyIDY75iz0R1BWImAafx"
 }
 
 
 # Environment variables
-export BAO_UNSEAL_KEY="J3TCOHtFZ6Zik88Lq/0Gb6oylkfoTkZpmaCEZ96dOxU="
+export BAO_UNSEAL_KEY="EJEvqoIK3CznqnLF6Lxm4Nq0Ea8t8FwvpPNEgbIPJGc="
 export BAO_ADDR="http://127.0.0.1:8200"
-export BAO_TOKEN="s.91QdcVjUTFTcRPjQg2gpXN7z"
+export BAO_TOKEN="s.Ba5vFyIDY75iz0R1BWImAafx"
 
+docker exec -it prod-vault env BAO_ADDR=$BAO_ADDR BAO_TOKEN=$BAO_TOKEN vault secrets enable -path=secret kv-v2
 
 # Unseal
-docker exec prod-vault vault operator unseal -address=$VAULT_ADDR $VAULT_UNSEAL_KEY
+docker exec prod-vault env BAO_ADDR=$BAO_ADDR vault operator unseal "$BAO_UNSEAL_KEY"
 
 # Seal (only do this on shutdown)
 docker exec -e VAULT_ADDR=http://127.0.0.1:8200 -e VAULT_TOKEN=$VAULT_TOKEN prod-vault vault operator seal
-
-
 
 
 docker stop prod-vault
@@ -72,7 +78,7 @@ load_dotenv()
 BAO_ADDR = os.environ.get("BAO_ADDR", "http://127.0.0.1:8200")
 BAO_TOKEN = os.environ.get("BAO_TOKEN", "dev-only-token")
 # Define the base directory for secrets. Must end with a slash.
-BAO_SECRET_BASE_PATH = os.getenv("BAO_SECRET_BASE_PATH", "kv/data/my-service/")
+BAO_SECRET_BASE_PATH = os.getenv("BAO_SECRET_BASE_PATH", "my-service/")
 API_KEY = os.getenv("API_KEY")
 
 app = FastAPI()
@@ -185,4 +191,4 @@ async def delete_key(key_name: str, api_key: str = Depends(validate_api_key)) ->
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to delete key: {str(e)}")
 
 if __name__ == "__main__":
-    uvicorn.run("vault_server:app", host="0.0.0.0", port=8080, reload=True)
+    uvicorn.run("vault_server:app", host="0.0.0.0", port=8080, reload=False)
