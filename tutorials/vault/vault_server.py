@@ -14,15 +14,15 @@ docker run -d --name=prod-vault --cap-add=IPC_LOCK -p 8200:8200 -v vault_data:/v
 
 # Output:
 {
-"unseal_key": "S81vt6Xq8713jX/aNci6l4K5ISO941cfGFgThHTb42g=",
-"root_token": "s.f0ciVdiezWCysBn40qiYptLq"
+"unseal_key": "J3TCOHtFZ6Zik88Lq/0Gb6oylkfoTkZpmaCEZ96dOxU=",
+"root_token": "s.91QdcVjUTFTcRPjQg2gpXN7z"
 }
 
 
 # Environment variables
-export BAO_UNSEAL_KEY="S81vt6Xq8713jX/aNci6l4K5ISO941cfGFgThHTb42g="
+export BAO_UNSEAL_KEY="J3TCOHtFZ6Zik88Lq/0Gb6oylkfoTkZpmaCEZ96dOxU="
 export BAO_ADDR="http://127.0.0.1:8200"
-export BAO_TOKEN="s.f0ciVdiezWCysBn40qiYptLq"
+export BAO_TOKEN="s.91QdcVjUTFTcRPjQg2gpXN7z"
 
 
 # Unseal
@@ -60,85 +60,80 @@ import hvac
 load_dotenv()
 
 # --- Configuration ---
-# You can set these in a .env file
 BAO_ADDR = os.environ.get("BAO_ADDR", "http://127.0.0.1:8200")
 BAO_TOKEN = os.environ.get("BAO_TOKEN", "dev-only-token")
-BAO_SECRET_PATH = os.getenv("BAO_SECRET_PATH", "kv/data/my-service/fernet-key")
+# Define the base directory for secrets. Must end with a slash.
+BAO_SECRET_BASE_PATH = os.getenv("BAO_SECRET_BASE_PATH", "kv/data/my-service/")
 API_KEY = os.getenv("API_KEY")
 
 app = FastAPI()
 
 # --- Global Components ---
-# Create a mutex lock for thread-safe access to the OpenBao client
 vault_lock = asyncio.Lock()
 
 # Initialize the OpenBao client at startup
 try:
-    # Correctly initialize the client with the OpenBao address and token
     vault_client = hvac.Client(url=BAO_ADDR, token=BAO_TOKEN)
     if not vault_client.is_authenticated():
         raise ValueError("OpenBao client is not authenticated. Check your BAO_TOKEN.")
 except Exception as e:
     print(f"Error connecting to OpenBao: {e}")
-    # Instead of `exit()`, it's better to let FastAPI handle the startup failure
     raise RuntimeError("Failed to connect to OpenBao on startup.") from e
 
 # Dependency to validate the API Key
 def validate_api_key(x_api_key: str = Header(..., convert_underscores=False)):
-    """Validates the API key provided in the 'X-Api-Key' header."""
     if x_api_key != API_KEY:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid API Key")
     return x_api_key
 
-
-# --- API Endpoints ---
-@app.post("/api/vault/store_key/")
+## --- API Endpoints ---
+@app.post("/api/vault/store_key")
 async def store_key(data: dict[str, str], api_key: str = Depends(validate_api_key)) -> dict[str, str]:
     """
     Accepts a secret key and stores it in OpenBao.
-    Uses an asyncio.Lock to prevent concurrent write operations.
     """
+    if not data:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Request body must not be empty.")
+
     key_name = list(data.keys())[0]
-    secret_key = data.get(key_name)
+    secret_value = data.get(key_name)
     
-    if not secret_key:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No 'secret_key' provided.")
+    if not secret_value:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No secret value provided.")
     
     try:
         async with vault_lock:
-            # Use asyncio.to_thread() to run the blocking hvac operation
             await asyncio.to_thread(
                 vault_client.secrets.kv.v2.create_or_update_secret,
-                path=f"{BAO_SECRET_PATH}{key_name}",
-                secret={key_name: secret_key}
+                # Correct path: combine the base path with the key name
+                path=f"{BAO_SECRET_BASE_PATH}{key_name}",
+                secret={key_name: secret_value}
             )
-        return {"message": "Key stored successfully in OpenBao."}
+        return {"message": f"Key '{key_name}' stored successfully in OpenBao."}
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to store key: {str(e)}")
 
 
 @app.get("/api/vault/get_key/{key_name}")
-async def get_key(key_name: str, api_key: str = Depends(validate_api_key)) -> dict[str, str]:
+async def get_key(key_name: str, api_key: str = Depends(validate_api_key)) -> dict[str, Any]:
     """
     Retrieves a specific key from OpenBao by its name.
     """
+    full_path = f"{BAO_SECRET_BASE_PATH}{key_name}"
 
     try:
         async with vault_lock:
             read_response = await asyncio.to_thread(
                 vault_client.secrets.kv.v2.read_secret_version,
-                path=f"{BAO_SECRET_PATH}{key_name}"
+                path=full_path
             )
         
-        # Access the nested data for KV v2 secrets
         if read_response and "data" in read_response and "data" in read_response["data"]:
-            # Retrieve all key-value pairs stored in the secret
             secret_data = read_response["data"]["data"]
             return secret_data
 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Secret '{key_name}' not found.")
     except hvac.exceptions.InvalidRequest:
-        # This exception is raised by hvac if the path doesn't exist
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Secret '{key_name}' not found at the specified path.")
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to retrieve key: {str(e)}")
@@ -149,10 +144,7 @@ async def list_keys(api_key: str = Depends(validate_api_key)) -> dict[str, Any]:
     """
     Retrieves a list of all secrets (keys) at the specified path.
     """
-    # The path for listing secrets needs to be the directory, not the full secret path
-    list_path = os.path.dirname(BAO_SECRET_PATH)
-    if not list_path:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="VAULT_SECRET_PATH is a single file and cannot be listed. Provide a valid path like 'kv/data/my-service/'.")
+    list_path = BAO_SECRET_BASE_PATH
     
     try:
         async with vault_lock:
@@ -161,12 +153,18 @@ async def list_keys(api_key: str = Depends(validate_api_key)) -> dict[str, Any]:
                 path=list_path
             )
         
-        # Correctly access the data
         if list_response and "data" in list_response and "keys" in list_response["data"]:
             keys_list = list_response["data"]["keys"]
             return {"keys": keys_list}
         
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No keys found in path '{list_path}'.")
+        # If no keys are found, list_secrets might return an empty dict or a response without "keys"
+        return {"keys": []}
+    
+    except hvac.exceptions.InvalidRequest:
+        # Occurs if the path itself does not exist in OpenBao
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Path '{list_path}' does not exist or is not a directory.")
+    except hvac.exceptions.InvalidPath:
+        return {"keys": []}
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list keys: {str(e)}")
 
@@ -176,17 +174,17 @@ async def delete_key(key_name: str, api_key: str = Depends(validate_api_key)) ->
     """
     Deletes the stored key from OpenBao.
     """
+    secret_path = f"{BAO_SECRET_BASE_PATH}{key_name}"
     try:
-        async with vault_lock:
-            await asyncio.to_thread(
-                vault_client.secrets.kv.v2.delete_latest_version_of_secret,
-                path=f"{BAO_SECRET_PATH}{key_name}"
-            )
-        return {"message": "Key deleted successfully from OpenBao."}
+        await asyncio.to_thread(
+            vault_client.secrets.kv.v2.delete_metadata_and_all_versions,
+            path=secret_path
+        )
+
+        return {"message": f"Key '{key_name}' deleted successfully from OpenBao."}
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to delete key: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
-    # The `uvicorn.run` command needs the module and app object, e.g., "your_file_name:app"
     uvicorn.run("vault_server:app", host="0.0.0.0", port=8080, reload=False)

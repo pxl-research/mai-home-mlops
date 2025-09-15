@@ -1,0 +1,228 @@
+{
+	"info": {
+		"_postman_id": "baa68547-b4ad-440f-a1ef-6a2bb81d8970",
+		"name": "mai_home_mlops",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "18542191"
+	},
+	"item": [
+		{
+			"name": "api/vault/store_key",
+			"request": {
+				"auth": {
+					"type": "apikey",
+					"apikey": [
+						{
+							"key": "key",
+							"value": "x_api_key",
+							"type": "string"
+						},
+						{
+							"key": "value",
+							"value": "{{api_key}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\"secret_key\": \"{{fernet_key}}\"}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/api/vault/store_key/",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"vault",
+						"store_key",
+						""
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "api/vault/get_key",
+			"protocolProfileBehavior": {
+				"disableBodyPruning": true
+			},
+			"request": {
+				"auth": {
+					"type": "apikey",
+					"apikey": [
+						{
+							"key": "value",
+							"value": "{{api_key}}",
+							"type": "string"
+						},
+						{
+							"key": "key",
+							"value": "x_api_key",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/api/vault/get_key/secret_key",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"vault",
+						"get_key",
+						"secret_key"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "api/vault/list_keys",
+			"protocolProfileBehavior": {
+				"disableBodyPruning": true
+			},
+			"request": {
+				"auth": {
+					"type": "apikey",
+					"apikey": [
+						{
+							"key": "value",
+							"value": "{{api_key}}",
+							"type": "string"
+						},
+						{
+							"key": "key",
+							"value": "x_api_key",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\"secret_key\": \"{{fernet_key}}\"}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/api/vault/list_keys/",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"vault",
+						"list_keys",
+						""
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "api/delete_key",
+			"request": {
+				"auth": {
+					"type": "apikey",
+					"apikey": [
+						{
+							"key": "key",
+							"value": "x_api_key",
+							"type": "string"
+						},
+						{
+							"key": "value",
+							"value": "{{api_key}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "DELETE",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\"secret_key\": \"{{fernet_key}}\"}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/api/vault/delete_key/secret_key",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"vault",
+						"delete_key",
+						"secret_key"
+					]
+				}
+			},
+			"response": []
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "fernet_key",
+			"value": "EinsZweiPolizei"
+		},
+		{
+			"key": "base_url",
+			"value": "http://127.0.0.1:8080"
+		},
+		{
+			"key": "api_key",
+			"value": ""
+		}
+	]
+}
