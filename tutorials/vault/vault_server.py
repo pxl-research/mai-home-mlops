@@ -5,36 +5,40 @@ pip install fastapi "uvicorn[standard]" hvac cryptography requests
 
 docker pull quay.io/openbao/openbao:2.4.1
 
-
 docker volume create vault_data
+sudo chown 1000:1000 /var/lib/docker/volumes/vault_data/_data  
 
 docker run -d --name=prod-vault \
   --cap-add=IPC_LOCK \
   -p 8200:8200 \
+  --user 1000:1000 \
   -v vault_data:/vault/file \
   -v $(pwd)/config.hcl:/vault/config/config.hcl \
   quay.io/openbao/openbao:2.4.1 server -config=/vault/config/config.hcl \
 && sleep 5 \
 && docker exec prod-vault env VAULT_ADDR=http://127.0.0.1:8200 \
-   vault operator init -key-shares=1 -key-threshold=1 \
-   | awk '/Unseal Key 1:/ {uk=$4} /Initial Root Token:/ {rt=$4; printf "{\n\"unseal_key\": \"%s\",\n\"root_token\": \"%s\"\n}\n", uk, rt}'
+  vault operator init -key-shares=1 -key-threshold=1 \
+  | awk '/Unseal Key 1:/ {uk=$4} /Initial Root Token:/ {rt=$4; printf "{\n\"unseal_key\": \"%s\",\n\"root_token\": \"%s\"\n}\n", uk, rt}'
+
+sudo chown 1000:1000 /var/lib/docker/volumes/vault_data/_data  
 
 # Output:
 {
-"unseal_key": "EJEvqoIK3CznqnLF6Lxm4Nq0Ea8t8FwvpPNEgbIPJGc=",
-"root_token": "s.Ba5vFyIDY75iz0R1BWImAafx"
+"unseal_key": "VjOf6LkMxKZ0ytru/+teI0E1kwinG94x+YNVsmZNhHU=",
+"root_token": "s.PFsRnzHHVfQX6a2iGuSEo6lA"
 }
 
 
 # Environment variables
-export BAO_UNSEAL_KEY="EJEvqoIK3CznqnLF6Lxm4Nq0Ea8t8FwvpPNEgbIPJGc="
+export BAO_UNSEAL_KEY="VjOf6LkMxKZ0ytru/+teI0E1kwinG94x+YNVsmZNhHU="
 export BAO_ADDR="http://127.0.0.1:8200"
-export BAO_TOKEN="s.Ba5vFyIDY75iz0R1BWImAafx"
-
-docker exec -it prod-vault env BAO_ADDR=$BAO_ADDR BAO_TOKEN=$BAO_TOKEN vault secrets enable -path=secret kv-v2
+export BAO_TOKEN="s.PFsRnzHHVfQX6a2iGuSEo6lA"
 
 # Unseal
 docker exec prod-vault env BAO_ADDR=$BAO_ADDR vault operator unseal "$BAO_UNSEAL_KEY"
+
+# Enable vault secrets
+docker exec -it prod-vault env BAO_ADDR=$BAO_ADDR BAO_TOKEN=$BAO_TOKEN vault secrets enable -path=secret kv-v2
 
 # Seal (only do this on shutdown)
 docker exec -e VAULT_ADDR=http://127.0.0.1:8200 -e VAULT_TOKEN=$VAULT_TOKEN prod-vault vault operator seal
