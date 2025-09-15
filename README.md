@@ -126,7 +126,6 @@ Approximately every 10 minutes, the contents of the queryable buffer are persist
     ```
 
 
-* Use OpenBao instead of HashiCorp Vault.
 * Make vault not in-memory but instead use Docker volume for persistent key storage.
 * InfluxDB 3 from tutorial to working ingest flow.
 * InfluxDB 3 with Azure Data Lake Storage.
