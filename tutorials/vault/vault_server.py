@@ -52,9 +52,18 @@ Prerequisites:
 import os
 import asyncio
 from typing import Any
+
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Header, status, Depends
+from pydantic import BaseModel
+import uvicorn
 import hvac
+
+
+class SecretPayload(BaseModel):
+    key_name: str
+    secret_value: str
+
 
 # Load environment variables from a .env file
 load_dotenv()
@@ -86,30 +95,20 @@ def validate_api_key(x_api_key: str = Header(..., convert_underscores=False)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid API Key")
     return x_api_key
 
-## --- API Endpoints ---
-@app.post("/api/vault/store_key")
-async def store_key(data: dict[str, str], api_key: str = Depends(validate_api_key)) -> dict[str, str]:
-    """
-    Accepts a secret key and stores it in OpenBao.
-    """
-    if not data:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Request body must not be empty.")
 
-    key_name = list(data.keys())[0]
-    secret_value = data.get(key_name)
-    
-    if not secret_value:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No secret value provided.")
-    
+@app.post("/api/vault/store_key")
+async def store_key(payload: SecretPayload, api_key: str = Depends(validate_api_key)) -> dict[str, str]:
+    print(f"Server received payload: {payload.model_dump_json()}")
+    if not payload.key_name or not payload.secret_value:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Key name and secret value must not be empty.")
     try:
         async with vault_lock:
             await asyncio.to_thread(
                 vault_client.secrets.kv.v2.create_or_update_secret,
-                # Correct path: combine the base path with the key name
-                path=f"{BAO_SECRET_BASE_PATH}{key_name}",
-                secret={key_name: secret_value}
+                path=f"{BAO_SECRET_BASE_PATH}{payload.key_name}",
+                secret={payload.key_name: payload.secret_value}
             )
-        return {"message": f"Key '{key_name}' stored successfully in OpenBao."}
+        return {"message": f"Key '{payload.key_name}' stored successfully in OpenBao."}
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to store key: {str(e)}")
 
@@ -186,5 +185,4 @@ async def delete_key(key_name: str, api_key: str = Depends(validate_api_key)) ->
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to delete key: {str(e)}")
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("vault_server:app", host="0.0.0.0", port=8080, reload=False)
+    uvicorn.run("vault_server:app", host="0.0.0.0", port=8080, reload=True)
