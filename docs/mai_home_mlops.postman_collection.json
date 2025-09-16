@@ -28,7 +28,7 @@
 				"header": [],
 				"body": {
 					"mode": "raw",
-					"raw": "{\"secret_key\": \"{{fernet_key}}\"}",
+					"raw": "{\"key_name\": \"{{key_name}}\", \"secret_value\": \"{{secret_value}}\"}",
 					"options": {
 						"raw": {
 							"language": "json"
@@ -83,7 +83,7 @@
 					}
 				},
 				"url": {
-					"raw": "{{base_url}}/api/vault/get_key/secret_key",
+					"raw": "{{base_url}}/api/vault/get_key/{{key_name}}",
 					"host": [
 						"{{base_url}}"
 					],
@@ -91,7 +91,7 @@
 						"api",
 						"vault",
 						"get_key",
-						"secret_key"
+						"{{key_name}}"
 					]
 				}
 			},
@@ -145,19 +145,19 @@
 			"response": []
 		},
 		{
-			"name": "api/delete_key",
+			"name": "api/vault/delete_key",
 			"request": {
 				"auth": {
 					"type": "apikey",
 					"apikey": [
 						{
-							"key": "key",
-							"value": "x_api_key",
+							"key": "value",
+							"value": "{{api_key}}",
 							"type": "string"
 						},
 						{
-							"key": "value",
-							"value": "{{api_key}}",
+							"key": "key",
+							"value": "x_api_key",
 							"type": "string"
 						}
 					]
@@ -166,7 +166,7 @@
 				"header": [],
 				"body": {
 					"mode": "raw",
-					"raw": "{\"secret_key\": \"{{fernet_key}}\"}",
+					"raw": "",
 					"options": {
 						"raw": {
 							"language": "json"
@@ -174,7 +174,7 @@
 					}
 				},
 				"url": {
-					"raw": "{{base_url}}/api/vault/delete_key/secret_key",
+					"raw": "{{base_url}}/api/vault/delete_key/{{key_name}}",
 					"host": [
 						"{{base_url}}"
 					],
@@ -182,7 +182,7 @@
 						"api",
 						"vault",
 						"delete_key",
-						"secret_key"
+						"{{key_name}}"
 					]
 				}
 			},
@@ -222,6 +222,14 @@
 		},
 		{
 			"key": "api_key",
+			"value": ""
+		},
+		{
+			"key": "key_name",
+			"value": ""
+		},
+		{
+			"key": "secret_value",
 			"value": ""
 		}
 	]
