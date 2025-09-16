@@ -1,0 +1,25 @@
+services:
+  vault:
+    image: quay.io/openbao/openbao:2.4.1
+    container_name: prod-vault
+    cap_add:
+      - IPC_LOCK
+    ports:
+      - "8200:8200"
+    volumes:
+      - ./vault_data:/vault/file            # Host-mounted folder for persistent Vault data
+      - ./config.hcl:/vault/config/config.hcl
+    command: server -config=/vault/config/config.hcl
+
+  app:
+    build: .
+    container_name: vault-app
+    depends_on:
+      - vault
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    ports:
+      - "8080:8080"
+    entrypoint: ["/app/entrypoint.sh"]
