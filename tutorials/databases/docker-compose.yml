@@ -1,8 +1,8 @@
 services:
   influxdb:
     user: root
-    image: influxdb:3-core
-    container_name: influxdb3
+    image: influxdb:3.4.2-core
+    container_name: influxdb
     command: ["/bin/bash", "/entrypoint_influxdb.sh"]
     ports:
       - "8181:8181"
@@ -14,7 +14,7 @@ services:
   app:
     user: root
     build: .
-    container_name: transform_influx
+    container_name: app
     env_file:
       - .env
     depends_on:
