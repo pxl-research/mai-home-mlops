@@ -125,8 +125,6 @@ Approximately every 10 minutes, the contents of the queryable buffer are persist
     conn.close()
     ```
 
-
-* Make vault not in-memory but instead use Docker volume for persistent key storage.
 * InfluxDB 3 from tutorial to working ingest flow.
 * InfluxDB 3 with Azure Data Lake Storage.
 * FastStream with Redis backend for streaming from IoT to ingest flow, simulate this (initial bulk ingest from CSV), then real-time streaming to InfluxDB in local VM storage (async in background to blob storage).

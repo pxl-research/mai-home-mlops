@@ -1,38 +1,29 @@
-# docker compose pull
-# docker exec -it influxdb3 influxdb3 create token --admin
-# TODO: save token in environment variable
-# docker compose up --build
-
 services:
   influxdb:
+    user: root
     image: influxdb:3-core
     container_name: influxdb3
-    command: >
-      influxdb3 serve
-      --node-id host01
-      --object-store file
-      --data-dir /var/lib/influxdb3
+    command: ["/bin/bash", "/entrypoint_influxdb.sh"]
     ports:
       - "8181:8181"
     volumes:
       - influxdb_data:/var/lib/influxdb3
-    healthcheck:
-      test: ["CMD", "curl", "-f", "-H", "Authorization: Bearer apiv3_ULFt_JIGfOHaniOfrh6CxMlnm0TK-yknH0B0_Ob9zu5SpiulEVeOJ5DA8VzXgrWticsLcdhxbyQbcKle4ncBgg", "http://localhost:8181/health"]
-      interval: 2s
-      timeout: 5s
-      retries: 5
-
+      - ./entrypoint_influxdb.sh:/entrypoint_influxdb.sh
+      - secrets:/secrets
+    
   app:
+    user: root
     build: .
     container_name: transform_influx
-    environment:
-      - INFLUXDB_URL=http://influxdb:8181
-      - INFLUXDB_TOKEN=apiv3_ULFt_JIGfOHaniOfrh6CxMlnm0TK-yknH0B0_Ob9zu5SpiulEVeOJ5DA8VzXgrWticsLcdhxbyQbcKle4ncBgg
-      - INFLUXDB_ORG=my-org
-      - INFLUXDB_BUCKET=my-bucket
+    env_file:
+      - .env
     depends_on:
-      influxdb:
-        condition: service_healthy
-
+      - influxdb
+    command: ["/bin/bash", "/entrypoint_app.sh"]
+    volumes:
+      - ./entrypoint_app.sh:/entrypoint_app.sh
+      - secrets:/secrets
+      
 volumes:
   influxdb_data:
+  secrets:

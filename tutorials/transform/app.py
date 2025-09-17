@@ -6,6 +6,7 @@ from influxdb_client_3 import InfluxDBClient3, Point
 import pandas as pd
 
 # Environment variables
+print("ole")
 host = os.getenv("INFLUXDB_URL")
 token = os.getenv("INFLUXDB_TOKEN")
 database = os.getenv("INFLUXDB_BUCKET")
