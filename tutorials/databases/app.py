@@ -22,6 +22,7 @@ client = InfluxDBClient3(
 )
 
 # Write a sample point (synchronously, but async is also possible)
+# NOTE: Point is safe from SQL injection!
 point = Point("census") \
     .tag("location", "Brussels") \
     .field("ant", 14) \
@@ -50,3 +51,39 @@ df["time"] = pd.to_datetime(df["time"], unit="ns")
 print("---")
 print(df.to_string(index=False))
 print("---")
+
+
+"""
+# Later we can do this:
+data = {
+    "measurement": "temperature",
+    "tags": {
+        "location": "office",
+        "device": "sensor1"
+    },
+    "fields": {
+        "value": 23.5,
+        "humidity": 55
+    },
+    "timestamp": "2025-09-17T12:00:00Z"
+}
+
+# Convert JSON to Point
+point = Point(data["measurement"])
+
+# Add tags
+for tag_key, tag_value in data.get("tags", {}).items():
+    point.tag(tag_key, tag_value)
+
+# Add fields
+for field_key, field_value in data.get("fields", {}).items():
+    point.field(field_key, field_value)
+
+# Add timestamp if provided
+if "timestamp" in data:
+    point.time(datetime.fromisoformat(data["timestamp"].replace("Z", "+00:00")))
+
+# Write to InfluxDB
+client.write(point)
+print("Point written:", point)
+"""
