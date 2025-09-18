@@ -1,0 +1,4 @@
+influxdb3-python==0.16.0
+pandas==2.3.2
+psycopg[binary]==3.2.10
+requests==2.32.5

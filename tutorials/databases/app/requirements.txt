@@ -1,3 +1,0 @@
-influxdb3-python
-requests
-pandas

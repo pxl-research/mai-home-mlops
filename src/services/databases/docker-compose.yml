@@ -10,7 +10,26 @@ services:
       - influxdb_data:/var/lib/influxdb3
       - ./influxdb/entrypoint_influxdb.sh:/entrypoint_influxdb.sh
       - secrets:/secrets
-    
+  
+  postgres:
+    image: postgres:17.6-alpine3.22 
+    container_name: postgres
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "5432:5432"
+    volumes: 
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      - influxdb
+
   app:
     user: root
     # build: .
@@ -21,7 +40,8 @@ services:
     env_file:
       - .env
     depends_on:
-      - influxdb
+      postgres:
+        condition: service_healthy
     command: ["/bin/bash", "/entrypoint_app.sh"]
     volumes:
       - ./app/entrypoint_app.sh:/entrypoint_app.sh
@@ -29,4 +49,6 @@ services:
       
 volumes:
   influxdb_data:
+  postgres_data:
+    driver: local
   secrets:

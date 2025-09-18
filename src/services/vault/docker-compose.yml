@@ -1,5 +1,6 @@
 services:
   vault:
+    user: root
     image: quay.io/openbao/openbao:2.4.1
     container_name: prod-vault
     cap_add:
@@ -23,3 +24,6 @@ services:
     ports:
       - "8080:8080"
     entrypoint: ["/app/entrypoint.sh"]
+
+volumes:
+  vault_data:
