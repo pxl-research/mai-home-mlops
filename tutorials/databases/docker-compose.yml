@@ -8,12 +8,15 @@ services:
       - "8181:8181"
     volumes:
       - influxdb_data:/var/lib/influxdb3
-      - ./entrypoint_influxdb.sh:/entrypoint_influxdb.sh
+      - ./influxdb/entrypoint_influxdb.sh:/entrypoint_influxdb.sh
       - secrets:/secrets
     
   app:
     user: root
-    build: .
+    # build: .
+    build:
+      context: ./app
+      dockerfile: Dockerfile
     container_name: app
     env_file:
       - .env
@@ -21,7 +24,7 @@ services:
       - influxdb
     command: ["/bin/bash", "/entrypoint_app.sh"]
     volumes:
-      - ./entrypoint_app.sh:/entrypoint_app.sh
+      - ./app/entrypoint_app.sh:/entrypoint_app.sh
       - secrets:/secrets
       
 volumes:
