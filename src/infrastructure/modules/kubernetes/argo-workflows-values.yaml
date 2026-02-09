@@ -1,0 +1,32 @@
+server:
+  serviceType: NodePort
+  replicas: 1
+  extraArgs:
+    - server
+    - --auth-mode=server
+    - --secure=false
+  sso:
+    enabled: false
+  readinessProbe:
+    httpGet:
+      path: /
+      port: 2746
+      scheme: HTTP
+
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  
+
+controller:
+  replicas: 1
+  workflowDefaults:
+    spec:
+      ttlStrategy:
+        secondsAfterCompletion: 600
+      podGC:
+        strategy: OnWorkflowCompletion
+        deleteDelayDuration: 5m

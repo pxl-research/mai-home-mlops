@@ -1,0 +1,16 @@
+apiVersion: 1
+
+datasources:
+  - name: TimescaleDB
+    type: postgres
+    uid: P12345678
+    url: database:5432
+    user: postgres
+    secureJsonData:
+      password: password
+    jsonData:
+      sslmode: "disable"
+      postgresVersion: 1800 # Corresponds to PG18
+      timescaledb: true
+    isDefault: true
+    editable: true

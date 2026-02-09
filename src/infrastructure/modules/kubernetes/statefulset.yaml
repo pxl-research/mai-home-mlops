@@ -1,0 +1,186 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ${app_name}
+  namespace: ${namespace_name}
+  labels:
+    app: ${app_name}
+spec:
+  serviceName: ${app_name}-svc
+  replicas: ${replica_count}
+  revisionHistoryLimit: 2
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 0 # only pods with ordinal >= 0 will be updated (thus all).
+  selector:
+    matchLabels: # so service.yaml matches this statefulset.yaml
+      app: ${app_name}
+  template:
+    metadata:
+      labels:
+        app: ${app_name}
+      annotations:
+        kubectl.kubernetes.io/restartedAt: ${rollout_trigger}
+    spec:
+      restartPolicy: ${restart}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/os
+                operator: In
+                values:
+                - ${platform_os}
+              - key: kubernetes.io/arch
+                operator: In
+                values:
+                - ${platform_architecture}
+%{ if deployment_target != "local_wsl2" || deployment_target != "local_linux" }
+      imagePullSecrets:
+      - name: ${image_pull_secret_name}
+%{ endif }
+%{ if length(depends_on_details) > 0 }
+      initContainers:
+%{ endif }
+%{ for dep_app_name, dep_details in depends_on_details }
+      - name: wait-for-${dep_app_name}
+        image: busybox:1.37
+        imagePullPolicy: IfNotPresent
+        command: ['sh', '-c', '
+          export TARGET_PORT=${coalesce(dep_details.check_port, dep_details.service_port, "80")};
+          export FQDN=${dep_app_name}-svc.${namespace_name}.svc.cluster.local;
+%{ if try(dep_details.exec_command, null) != null }
+          until ${join(" ", coalesce(dep_details.exec_command, []))} $FQDN $TARGET_PORT; do
+            echo "Waiting (EXEC) for service ${dep_app_name} on port $TARGET_PORT...";
+            sleep 5;
+          done;
+%{ else }
+%{ if try(dep_details.http_path, null) != null }
+          export READY_PATH=${coalesce(dep_details.http_path, dep_details.ready_path, "/readyz")};
+          until wget -q -O /dev/null http://$FQDN:$TARGET_PORT$READY_PATH; do
+            echo "Waiting (HTTP) for readiness probe on $FQDN:$TARGET_PORT$READY_PATH...";
+            sleep 5;
+          done;
+%{ else }
+          while ! nc -z $FQDN $TARGET_PORT; do
+            echo "Waiting (NC) for network access on $FQDN:$TARGET_PORT...";
+            sleep 5;
+          done;
+%{ endif }
+%{ endif }
+          echo "Service ${dep_app_name} is reachable.";
+        ']
+%{ endfor }
+      containers:
+      - name: ${app_name}
+        image: ${image_name}:${image_tag}
+%{ if length(app_env) > 0 || (deployment_target == "local_wsl2") }
+        env:
+%{ for key, value in app_env ~}
+        - name: ${key}
+          value: ${value}
+%{ endfor ~}
+%{ if deployment_target == "local_wsl2" }
+        - name: LD_LIBRARY_PATH
+          value: "/usr/lib/wsl/lib"
+%{ endif }
+%{ endif ~}
+%{ if deployment_target == "local_wsl2" || deployment_target == "local_linux" }
+        imagePullPolicy: Never
+%{ else }
+        imagePullPolicy: Always
+%{ endif }
+        ports:
+%{ for port in ports ~}
+        - name: ${port.name}
+          containerPort: ${port.target_port}
+          protocol: ${port.protocol}
+%{ endfor ~}
+%{ if command != null }
+        command: ["/bin/sh", "-c", ${command}]
+%{ endif }
+        # Resource requests and limits
+        resources:
+          requests:
+            cpu: ${request_cpu}
+            memory: ${request_memory}
+          limits:
+            cpu: ${limit_cpu}
+            memory: ${limit_memory}
+%{ if limit_gpu > 0 }
+            nvidia.com/gpu: ${limit_gpu}
+%{ endif }
+
+%{ if liveness_probe_config.path != null || liveness_probe_config.command != null }
+        livenessProbe:
+%{ if liveness_probe_config.path != null } # HTTP GET Probe
+          httpGet:
+            path: ${liveness_probe_config.path}
+            port: ${liveness_probe_config.target_port}
+%{ else } # EXEC Command Probe
+          exec:
+            command: ${jsonencode(liveness_probe_config.command)}
+%{ endif }
+          initialDelaySeconds: ${liveness_probe_config.initial_delay_seconds}
+          periodSeconds: ${liveness_probe_config.period_seconds}
+          timeoutSeconds: ${liveness_probe_config.timeout_seconds}
+          failureThreshold: ${liveness_probe_config.failure_threshold}
+%{ endif }
+
+%{ if readiness_probe_config.path != null || readiness_probe_config.command != null }
+        readinessProbe:
+%{ if readiness_probe_config.path != null } # HTTP GET Probe
+          httpGet:
+            path: ${readiness_probe_config.path}
+            port: ${readiness_probe_config.target_port}
+%{ else } # EXEC Command Probe
+          exec:
+            command: ${jsonencode(readiness_probe_config.command)}
+%{ endif }
+          initialDelaySeconds: ${readiness_probe_config.initial_delay_seconds}
+          periodSeconds: ${readiness_probe_config.period_seconds}
+          timeoutSeconds: ${readiness_probe_config.timeout_seconds}
+          successThreshold: ${readiness_probe_config.success_threshold}
+          failureThreshold: ${readiness_probe_config.failure_threshold}
+%{ endif }
+
+        # Dynamically injects all defined volume mounts
+        volumeMounts:
+%{ for name, volume in data_volumes }
+        - name: ${name}
+          mountPath: ${volume.mount_path}
+%{ endfor }
+%{ if deployment_target == "local_wsl2" }
+        - name: wsl-lib-mount
+          mountPath: /usr/lib/wsl
+          readOnly: true
+%{ endif }
+      volumes:
+%{ if deployment_target == "local_wsl2" }
+      - name: wsl-lib-mount
+        hostPath:
+          path: /usr/lib/wsl
+          type: Directory
+%{ endif }
+
+  # Creates a PVC for each replica, based on the defined data_volumes map
+  # PVCs can be expanded but not shrunk, thus request only what you need.
+  # * Database Storage: Use StatefulSet with RWO PVCs. Each replica gets its own storage.
+  # * Shared Uploads: Use Deployment with single RWX PVC. All replicas share the same files.
+  # * Scratch Space: Use emptyDir for temporary data processing that doesn't need persistence; survives pod restart but not pod deletion.
+  # Choose the right reclaim policy:
+  # * Retain for production databases.
+  # * Delete for development and temporary data
+  volumeClaimTemplates:
+  %{ for name, volume in data_volumes }
+  - metadata:
+      name: ${name}
+    spec:
+      storageClassName: ${volume.storage_class_name}
+      accessModes: ["${volume.access_mode}"] # e.g., ReadWriteOnce
+      resources:
+        requests:
+          storage: ${volume.storage_request} # e.g., 10Gi
+  %{ endfor }

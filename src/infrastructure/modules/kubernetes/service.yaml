@@ -1,0 +1,35 @@
+# Defines the Kubernetes Service to expose the Deployment.
+# Service: stable virtual IP and DNS name for a set of Pods.
+# Clients talk to the Service.
+# The Service forwards to the right Pods.
+apiVersion: v1
+kind: Service
+metadata:
+  # The service name is managed by Terraform's templatefile function.
+  name: ${container_name}-svc
+  namespace: ${namespace_name}
+  labels:
+    app: ${container_name}
+spec:
+  # ClusterIP is a stable virtual IP that never changes.
+  # It is only reachable from within the cluster.
+  # An Ingress controller, which handles external traffic, uses an Ingress resource to route traffic to backend Services,
+  # and for this purpose, ClusterIP is the standard, most efficient, and secure choice.
+  # Otherwise, when a service is not externally reachable via Gateway or Ingress controller,
+  # a ClusterIP is sufficient in kind and apparently also for minikube when driver=docker.
+  # For minikube driver=virtualbox we need NodePort because a VM is a network barrier which requires NodePort or tunnel to bridge the network.
+  type: ClusterIP
+  # The selector targets pods (or pods in Deployment) with the matching label.
+  # If no Pods match the selector, the Service has no endpoints (connection refused)
+  # Pods must have all labels specified in the Service selector to receive traffic.
+  # Both key and value must match and this for each key value pair.
+  # We keep this simple by using 1 selector: (app: app_name)
+  selector:
+    app: ${container_name}
+  ports:
+%{ for port in ports ~}
+    - name: ${port.name}
+      port: ${port.service_port} # Internal port or port the Gateway/Ingress Controller targets
+      targetPort: ${port.target_port} # The container port to forward traffic to
+      protocol: ${port.protocol}
+%{ endfor ~}

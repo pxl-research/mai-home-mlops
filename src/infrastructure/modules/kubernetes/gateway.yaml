@@ -1,0 +1,15 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ${project_namespace_name}-gateway
+  namespace: ${project_namespace_name}
+spec:
+  gatewayClassName: nginx
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: ${ingress_port}
+      hostname: ${ingress_host}
+      allowedRoutes:
+        namespaces:
+          from: All

@@ -1,0 +1,38 @@
+# docker-compose down -v
+# docker-compose up --build
+# Check API: Visit http://localhost:8000/data
+# Instant Dashboarding: Visit http://localhost:3000. Login with admin/admin. Go to Connections > Data Sources. You will see "TimescaleDB" already listed.
+# Click "Explore" on that datasource and run: SELECT time, value FROM sensor_data ORDER BY time ASC;
+services:
+  database:
+    build: ./database
+    environment:
+      - POSTGRES_PASSWORD=password
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  generator:
+    build: ./generator
+    depends_on:
+      database:
+        condition: service_healthy
+
+  api:
+    build: ./api
+    ports:
+      - "8000:8000"
+    depends_on:
+      database:
+        condition: service_healthy
+
+  dashboard:
+    build: ./dashboard
+    ports:
+      - "3000:3000"
+    depends_on:
+      - database

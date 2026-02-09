@@ -175,6 +175,13 @@ sudo install minikube-linux-amd64 /usr/local/bin/minikube && rm minikube-linux-a
 minikube start
 ```
 
+#### kind
+We will probably use kind as an alternative if using Kubeflow Pipelines:
+https://kind.sigs.k8s.io/docs/user/quick-start#installing-from-release-binaries
+[ $(uname -m) = x86_64 ] && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.30.0/kind-linux-amd64
+sudo mv ./kind /usr/local/bin/kind
+
+
 #### Metaflow
 ```
 pip install metaflow # or: pip install --upgrade metaflow
@@ -210,13 +217,6 @@ tofu destroy
 Although we do not use Kubeflow due to it being more heavyweight than Metaflow, we provide the following installation guide.
 One can adjust the yaml file in the manifests folder to exclude certain Kubeflow components.
 
-### kubectl
-
-```
-sudo apt install snapd
-sudo snap install kubectl --classic
-alias kubectl="minikube kubectl --"
-```
 
 ### kustomize
 ```
@@ -224,7 +224,7 @@ curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack
 sudo install kustomize /usr/local/bin/kustomize && rm kustomize
 ```
 
-### Kubeflow
+### Kubeflow (this installs everything, not sure about that)
 
 [Install with a single command](https://github.com/kubeflow/manifests?tab=readme-ov-file#install-with-a-single-command)
 ```

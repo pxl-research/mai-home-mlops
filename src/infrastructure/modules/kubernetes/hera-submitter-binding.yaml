@@ -1,0 +1,12 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hera-submitter-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: hera-submitter-role
+subjects:
+  - kind: ServiceAccount
+    name: hera-submitter
+    namespace: ${project_namespace_name}

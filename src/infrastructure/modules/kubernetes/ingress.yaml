@@ -1,0 +1,29 @@
+# Deprecated: not used anymore, but might serve as inspiration when using ingress instead of gateway API,
+# although gateway API is preferred.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ${app_name}-ingress
+  namespace: ${namespace_name}
+  labels:
+    app: ${app_name}
+  annotations:
+    # Use 'nginx' as the Ingress Class. Ensure you have an NGINX Ingress Controller installed.
+    kubernetes.io/ingress.class: "nginx"
+    # Route all requests to the service root.
+    nginx.ingress.kubernetes.io/rewrite-target: /$2 # capture group 2
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "21600" # seconds (6h)
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "21600" # seconds (6h)
+spec:
+  rules:
+    # The host defined here will be used to route external traffic.
+    - host: ${ingress_host}
+      http:
+        paths:
+          - path: ${ingress_path}(/|$)(.*)
+            pathType: Prefix # Matches traffic for / and any subpath (e.g., /trigger)
+            backend:
+              service:
+                name: ${app_name}-svc # Targets the ClusterIP service
+                port:
+                  number: 80 # Targets the Service port

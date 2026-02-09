@@ -1,0 +1,165 @@
+# Deployment: for stateless applications
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${app_name}
+  namespace: ${namespace_name}
+  labels:
+    app: ${app_name}
+# spec is the desired state which gets reconciled by controller.
+# If there are too few Pods, it creates more.
+# If there are too many, it removes extras.
+# If Pods are unhealthy, it replaces them.
+spec:
+  replicas: ${replica_count}
+  revisionHistoryLimit: 2
+  progressDeadlineSeconds: 1200
+  minReadySeconds: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  selector:
+    matchLabels: # so service.yaml matches this deployment.yaml
+      app: ${app_name}
+  template:
+    metadata:
+      labels:
+        app: ${app_name}
+      annotations:
+        kubectl.kubernetes.io/restartedAt: ${rollout_trigger}
+    spec:
+      restartPolicy: ${restart}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/os
+                operator: In
+                values:
+                - ${platform_os} # TODO: make configurable
+              - key: kubernetes.io/arch
+                operator: In
+                values:
+                - ${platform_architecture} # TODO: make configurable
+%{ if deployment_target != "local_wsl2" && deployment_target != "local_linux" }
+      imagePullSecrets:
+      - name: ${image_pull_secret_name}
+%{ endif }
+%{ if length(depends_on_details) > 0 }
+      initContainers:
+%{ for dep_app_name, dep_details in depends_on_details }
+      - name: wait-for-${dep_app_name}
+        image: busybox:1.37
+        imagePullPolicy: IfNotPresent
+        command: ['sh', '-c', '
+          export TARGET_PORT=${coalesce(dep_details.check_port, dep_details.service_port, "80")};
+          export FQDN=${dep_app_name}-svc.${namespace_name}.svc.cluster.local;
+%{ if try(dep_details.exec_command, null) != null }
+          until ${join(" ", coalesce(dep_details.exec_command, []))} $FQDN $TARGET_PORT; do
+            echo "Waiting (EXEC) for service ${dep_app_name} on port $TARGET_PORT...";
+            sleep 5;
+          done;
+%{ else }
+%{ if try(dep_details.http_path, null) != null }
+          export READY_PATH=${coalesce(dep_details.http_path, dep_details.ready_path, "/readyz")};
+          until wget -q -O /dev/null http://$FQDN:$TARGET_PORT$READY_PATH; do
+            echo "Waiting (HTTP) for readiness probe on $FQDN:$TARGET_PORT$READY_PATH...";
+            sleep 5;
+          done;
+%{ else }
+          while ! nc -z $FQDN $TARGET_PORT; do
+            echo "Waiting (NC) for network access on $FQDN:$TARGET_PORT...";
+            sleep 5;
+          done;
+%{ endif }
+%{ endif }
+          echo "Service ${dep_app_name} is reachable.";
+        ']
+%{ endfor }
+%{ endif }
+      containers:
+      - name: ${app_name}
+        image: ${image_name}:${image_tag}
+%{ if length(app_env) > 0 || (deployment_target == "local_wsl2") }
+        env:
+%{ for key, value in app_env ~}
+        - name: ${key}
+          value: ${value}
+%{ endfor ~}
+%{ if deployment_target == "local_wsl2" }
+        - name: LD_LIBRARY_PATH
+          value: "/usr/lib/wsl/lib"
+%{ endif }
+%{ endif ~}
+%{ if deployment_target == "local_wsl2" || deployment_target == "local_linux" }
+        imagePullPolicy: Never
+%{ else }
+        imagePullPolicy: Always
+%{ endif }
+        ports:
+%{ for port in ports ~}
+        - name: ${port.name}
+          containerPort: ${port.target_port}
+          protocol: ${port.protocol}
+%{ endfor ~}
+%{ if command != null }
+        command: ["/bin/sh", "-c", ${command}]
+%{ endif }
+%{ if liveness_probe_config.path != null || liveness_probe_config.command != null }
+        livenessProbe:
+%{ if liveness_probe_config.path != null } # HTTP GET Probe
+          httpGet:
+            path: ${liveness_probe_config.path}
+            port: ${liveness_probe_config.target_port}
+%{ else } # EXEC Command Probe
+          exec:
+            command: ${jsonencode(liveness_probe_config.command)}
+%{ endif }
+          initialDelaySeconds: ${liveness_probe_config.initial_delay_seconds}
+          periodSeconds: ${liveness_probe_config.period_seconds}
+          timeoutSeconds: ${liveness_probe_config.timeout_seconds}
+          failureThreshold: ${liveness_probe_config.failure_threshold}
+%{ endif }
+
+%{ if readiness_probe_config.path != null || readiness_probe_config.command != null }
+        readinessProbe:
+%{ if readiness_probe_config.path != null } # HTTP GET Probe
+          httpGet:
+            path: ${readiness_probe_config.path}
+            port: ${readiness_probe_config.target_port}
+%{ else } # EXEC Command Probe
+          exec:
+            command: ${jsonencode(readiness_probe_config.command)}
+%{ endif }
+          initialDelaySeconds: ${readiness_probe_config.initial_delay_seconds}
+          periodSeconds: ${readiness_probe_config.period_seconds}
+          timeoutSeconds: ${readiness_probe_config.timeout_seconds}
+          successThreshold: ${readiness_probe_config.success_threshold}
+          failureThreshold: ${readiness_probe_config.failure_threshold}
+%{ endif }
+        resources:
+          requests:
+            cpu: ${request_cpu} # e.g. "128m"
+            memory: ${request_memory} # e.g. "256Mi"
+          limits:
+            cpu: ${limit_cpu} # e.g. "256m"
+            memory: ${limit_memory} # e.g. "1Gi"
+%{ if limit_gpu > 0 }
+            nvidia.com/gpu: ${limit_gpu}
+%{ endif }
+%{ if deployment_target == "local_wsl2" }
+        volumeMounts:
+        - name: wsl-lib-mount
+          mountPath: /usr/lib/wsl
+          readOnly: true
+%{ endif }
+%{ if deployment_target == "local_wsl2" }
+      volumes:
+      - name: wsl-lib-mount
+        hostPath:
+          path: /usr/lib/wsl
+          type: Directory
+%{ endif }
