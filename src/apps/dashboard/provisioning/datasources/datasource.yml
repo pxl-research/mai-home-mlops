@@ -6,11 +6,13 @@ datasources:
     uid: P12345678
     url: database:5432
     user: postgres
+    # ADD THIS LINE:
+    database: postgres
     secureJsonData:
       password: password
     jsonData:
       sslmode: "disable"
-      postgresVersion: 1800 # Corresponds to PG18
+      postgresVersion: 1800
       timescaledb: true
     isDefault: true
     editable: true

@@ -17,7 +17,7 @@
         {
           "datasource": { "type": "postgres", "uid": "P12345678" },
           "format": "time_series",
-          "rawSql": "SELECT time AS \"time\", value FROM sensor_data ORDER BY 1",
+          "rawSql": "SELECT time AS \"time\", value FROM sensor_data WHERE time > now() - interval '1 hour' ORDER BY 1",
           "refId": "A"
         }
       ]
