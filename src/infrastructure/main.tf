@@ -17,7 +17,7 @@ module "development" {
 
   # Main configuration
   # ------------------
-  cluster_name            = "pixie"
+  cluster_name            = "mai-home"
   project_namespace_name  = "pixie"
   argo_workflows_version  = "0.45.26"
   ingress_host            = "localhost"
