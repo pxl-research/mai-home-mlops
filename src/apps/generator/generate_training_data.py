@@ -29,7 +29,9 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
     # Anchor date to keep track of the water softener cycle accurately over time
     anchor_date = datetime.datetime.strptime(base_start_date_str, "%Y-%m-%d").date()
 
-    # Average volume when active
+    # Average volume (L) when active. Hours 1–4 are 0.0 to model deep sleep: no consumption expected.
+    # Zero-profile hours that still fire is_active (rare, due to low but non-zero probabilities) are
+    # handled by the base_volume == 0.0 guard below — preventing noise from inflating them to ≥ 1 L.
     weekday_profile = {
         0: 1.5, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 1.5,
         6: 5.5, 7: 4.5, 8: 6.0, 9: 7.5, 10: 7.0, 11: 6.5,
@@ -98,8 +100,11 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
             if base_volume == 0.0:
                 volumes.append(0)
             else:
+                # Peaks in July: couples use more water in summer (garden, outdoor activities).
                 seasonal_factor = 1.0 + 0.2 * np.cos(2 * np.pi * (dt.month - 7) / 12)
                 volume = base_volume * seasonal_factor
+                # Noise std dev is lowest for couples (15%): two-person routine is more predictable.
+                # Ordering across types: couple (15%) < family (20%) < single (25%).
                 noise = np.random.normal(0, max(0.5, volume * 0.15))
                 volume = max(1, volume + noise)
                 volumes.append(round(volume))
@@ -131,6 +136,7 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
 
     anchor_date = datetime.datetime.strptime(base_start_date_str, "%Y-%m-%d").date()
 
+    # Hours 1–4 are 0.0: deep sleep, no consumption expected. See zero-guard in the loop body.
     weekday_profile = {
         0: 2.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 2.5,
         6: 8.0, 7: 25.0, 8: 20.0, 9: 10.0, 10: 8.0, 11: 9.0,
@@ -172,6 +178,7 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
             current_day = dt.date()
             is_vacation_day = np.random.rand() < vacation_probability
 
+        # Family uses a larger softener unit: 40 L + 60 L per regeneration cycle (vs. 24+40 L for couple/single).
         if days_since_anchor % water_softener_cycle == 3 and hour in [2, 3]:
             if hour == 2:
                 volume = 40 + np.random.randint(-3, 4)
@@ -196,8 +203,10 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
             if base_volume == 0.0:
                 volumes.append(0)
             else:
+                # Peaks in July: families use significantly more water in summer (children home, garden, pool).
                 seasonal_factor = 1.0 + 0.25 * np.cos(2 * np.pi * (dt.month - 7) / 12)
                 volume = base_volume * seasonal_factor
+                # Noise std dev 20%: more variable than couple (more occupants, less predictable overlap).
                 noise = np.random.normal(0, max(0.5, volume * 0.20))
                 volume = max(1, volume + noise)
                 volumes.append(round(volume))
@@ -229,6 +238,8 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
 
     anchor_date = datetime.datetime.strptime(base_start_date_str, "%Y-%m-%d").date()
 
+    # Hours 1–5 (weekday) and 2–5 (weekend) are 0.0: deep sleep, no consumption expected.
+    # See zero-guard in the loop body.
     weekday_profile = {
         0: 2.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0,
         6: 3.0, 7: 10.0, 8: 4.0, 9: 2.0, 10: 2.0, 11: 2.0,
@@ -287,6 +298,8 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
 
         is_active = np.random.rand() < prob_profile[hour]
 
+        # Single-only: 20% chance of daytime absence on weekends (shopping, sports, social).
+        # Intentionally absent from couple/family — it serves as an ML-differentiating feature.
         if is_weekend and (9 <= hour <= 21) and (np.random.rand() < 0.20):
             is_active = False
 
@@ -297,8 +310,11 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
             if base_volume == 0.0:
                 volumes.append(0)
             else:
+                # Peaks in July: minor summer uptick (more showers, drinking water).
+                # Amplitude is small (0.1) since a single person has no garden or pool effect.
                 seasonal_factor = 1.0 + 0.1 * np.cos(2 * np.pi * (dt.month - 7) / 12)
                 volume = base_volume * seasonal_factor
+                # Noise std dev is highest for singles (25%): irregular lifestyle produces most variability.
                 noise = np.random.normal(0, max(0.5, volume * 0.25))
                 volume = max(1, volume + noise)
                 volumes.append(round(volume))
