@@ -1,8 +1,9 @@
 import pandas as pd
 import numpy as np
 import datetime
+from dateutil.relativedelta import relativedelta
 
-def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, base_start_date_str="2024-01-01"):
+def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, base_start_date_str="2024-01-01", seed=42, household_id='couple_1', vacation_probability=0.05):
     """
     Generates synthetic water consumption for a couple.
     Can generate an arbitrary interval (even 1 single hour) or a default 2-year range.
@@ -11,12 +12,19 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
     :param start_date_str: Start date for default generation if date_range is None.
     :param years: Duration in years for default generation if date_range is None.
     :param base_start_date_str: The anchor date used to keep the water softener's 12-day cycle synchronized.
+    :param seed: Random seed for reproducibility. Set to None to disable.
+    :param household_id: Identifier for this household instance, used as a label in the output DataFrame.
+    :param vacation_probability: Daily probability that all household members are absent (0.0–1.0). On vacation days, human consumption is zero; the water softener still runs on its timer.
     """
     # Initialize default date range if none is provided
     if date_range is None:
         start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d")
-        end_date = start_date + datetime.timedelta(days=years*365)
+        end_date = start_date + relativedelta(years=years)
         date_range = pd.date_range(start=start_date, end=end_date, freq='h')[:-1]
+
+    # Seed for reproducibility: same seed produces identical output across runs, enabling stable train/val/test splits
+    if seed is not None:
+        np.random.seed(seed)
 
     # Anchor date to keep track of the water softener cycle accurately over time
     anchor_date = datetime.datetime.strptime(base_start_date_str, "%Y-%m-%d").date()
@@ -51,12 +59,19 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
 
     volumes = []
     water_softener_cycle = 12
+    current_day = None
+    is_vacation_day = False
 
     for dt in date_range:
         hour = dt.hour
         is_weekend = dt.dayofweek >= 5
         # Calculate days since the absolute anchor date to ensure cycle consistency
         days_since_anchor = (dt.date() - anchor_date).days
+
+        # Determine once per day whether the household is on vacation
+        if dt.date() != current_day:
+            current_day = dt.date()
+            is_vacation_day = np.random.rand() < vacation_probability
 
         # Check if the water softener runs tonight
         if days_since_anchor % water_softener_cycle == 11 and hour in [3, 4]:
@@ -65,6 +80,10 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
             elif hour == 4:
                 volume = 40 + np.random.randint(-2, 3)
             volumes.append(round(volume))
+            continue
+
+        if is_vacation_day:
+            volumes.append(0)
             continue
 
         prob_profile = weekend_activity_prob if is_weekend else weekday_activity_prob
@@ -79,20 +98,36 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
             if base_volume == 0.0:
                 volumes.append(0)
             else:
-                seasonal_factor = 1.0 + 0.2 * np.cos(2 * np.pi * (dt.month - 1) / 12)
+                seasonal_factor = 1.0 + 0.2 * np.cos(2 * np.pi * (dt.month - 7) / 12)
                 volume = base_volume * seasonal_factor
-                noise = np.random.normal(0, max(0.5, volume * 0.25))
+                noise = np.random.normal(0, max(0.5, volume * 0.15))
                 volume = max(1, volume + noise)
                 volumes.append(round(volume))
 
-    return pd.DataFrame({'Timestamp': date_range, 'Volume_Liter': volumes})
+    return pd.DataFrame({'Timestamp': date_range, 'Volume_Liter': volumes, 'household_id': household_id})
 
 
-def generate_family_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, base_start_date_str="2024-01-01"):
+def generate_family_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, base_start_date_str="2024-01-01", seed=42, household_id='family_1', vacation_probability=0.05):
+    """
+    Generates synthetic water consumption for a family.
+    Can generate an arbitrary interval (even 1 single hour) or a default 2-year range.
+
+    :param date_range: Explicit pd.DatetimeIndex to generate data for. If None, uses start_date_str and years.
+    :param start_date_str: Start date for default generation if date_range is None.
+    :param years: Duration in years for default generation if date_range is None.
+    :param base_start_date_str: The anchor date used to keep the water softener's 4-day cycle synchronized.
+    :param seed: Random seed for reproducibility. Set to None to disable.
+    :param household_id: Identifier for this household instance, used as a label in the output DataFrame.
+    :param vacation_probability: Daily probability that all household members are absent (0.0–1.0). On vacation days, human consumption is zero; the water softener still runs on its timer.
+    """
     if date_range is None:
         start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d")
-        end_date = start_date + datetime.timedelta(days=years*365)
+        end_date = start_date + relativedelta(years=years)
         date_range = pd.date_range(start=start_date, end=end_date, freq='h')[:-1]
+
+    # Seed for reproducibility: same seed produces identical output across runs, enabling stable train/val/test splits
+    if seed is not None:
+        np.random.seed(seed)
 
     anchor_date = datetime.datetime.strptime(base_start_date_str, "%Y-%m-%d").date()
 
@@ -124,18 +159,29 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
 
     volumes = []
     water_softener_cycle = 4
+    current_day = None
+    is_vacation_day = False
 
     for dt in date_range:
         hour = dt.hour
         is_weekend = dt.dayofweek >= 5
         days_since_anchor = (dt.date() - anchor_date).days
 
+        # Determine once per day whether the household is on vacation
+        if dt.date() != current_day:
+            current_day = dt.date()
+            is_vacation_day = np.random.rand() < vacation_probability
+
         if days_since_anchor % water_softener_cycle == 3 and hour in [2, 3]:
             if hour == 2:
-                volume = 24 + np.random.randint(-3, 4)
-            elif hour == 3:
                 volume = 40 + np.random.randint(-3, 4)
+            elif hour == 3:
+                volume = 60 + np.random.randint(-3, 4)
             volumes.append(round(volume))
+            continue
+
+        if is_vacation_day:
+            volumes.append(0)
             continue
 
         prob_profile = weekend_activity_prob if is_weekend else weekday_activity_prob
@@ -152,18 +198,34 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
             else:
                 seasonal_factor = 1.0 + 0.25 * np.cos(2 * np.pi * (dt.month - 7) / 12)
                 volume = base_volume * seasonal_factor
-                noise = np.random.normal(0, max(1.0, volume * 0.30))
+                noise = np.random.normal(0, max(0.5, volume * 0.20))
                 volume = max(1, volume + noise)
                 volumes.append(round(volume))
 
-    return pd.DataFrame({'Timestamp': date_range, 'Volume_Liter': volumes})
+    return pd.DataFrame({'Timestamp': date_range, 'Volume_Liter': volumes, 'household_id': household_id})
 
 
-def generate_single_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, base_start_date_str="2024-01-01"):
+def generate_single_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, base_start_date_str="2024-01-01", seed=42, household_id='single_1', vacation_probability=0.05):
+    """
+    Generates synthetic water consumption for a single-person household.
+    Can generate an arbitrary interval (even 1 single hour) or a default 2-year range.
+
+    :param date_range: Explicit pd.DatetimeIndex to generate data for. If None, uses start_date_str and years.
+    :param start_date_str: Start date for default generation if date_range is None.
+    :param years: Duration in years for default generation if date_range is None.
+    :param base_start_date_str: The anchor date used to keep the water softener's 24-day cycle synchronized.
+    :param seed: Random seed for reproducibility. Set to None to disable.
+    :param household_id: Identifier for this household instance, used as a label in the output DataFrame.
+    :param vacation_probability: Daily probability that the household member is absent (0.0–1.0). On vacation days, human consumption is zero; the water softener still runs on its timer.
+    """
     if date_range is None:
         start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d")
-        end_date = start_date + datetime.timedelta(days=years*365)
+        end_date = start_date + relativedelta(years=years)
         date_range = pd.date_range(start=start_date, end=end_date, freq='h')[:-1]
+
+    # Seed for reproducibility: same seed produces identical output across runs, enabling stable train/val/test splits
+    if seed is not None:
+        np.random.seed(seed)
 
     anchor_date = datetime.datetime.strptime(base_start_date_str, "%Y-%m-%d").date()
 
@@ -195,11 +257,18 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
 
     volumes = []
     water_softener_cycle = 24
+    current_day = None
+    is_vacation_day = False
 
     for dt in date_range:
         hour = dt.hour
         is_weekend = dt.dayofweek >= 5
         days_since_anchor = (dt.date() - anchor_date).days
+
+        # Determine once per day whether the household member is on vacation
+        if dt.date() != current_day:
+            current_day = dt.date()
+            is_vacation_day = np.random.rand() < vacation_probability
 
         if days_since_anchor % water_softener_cycle == 23 and hour in [3, 4]:
             if hour == 3:
@@ -207,6 +276,10 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
             elif hour == 4:
                 volume = 40 + np.random.randint(-1, 2)
             volumes.append(round(volume))
+            continue
+
+        if is_vacation_day:
+            volumes.append(0)
             continue
 
         prob_profile = weekend_activity_prob if is_weekend else weekday_activity_prob
@@ -221,30 +294,34 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
             volumes.append(0)
         else:
             base_volume = vol_profile[hour]
-            seasonal_factor = 1.0 + 0.1 * np.cos(2 * np.pi * (dt.month - 1) / 12)
-            volume = base_volume * seasonal_factor
-            noise = np.random.normal(0, max(0.5, volume * 0.40))
-            volume = max(1, volume + noise)
-            volumes.append(round(volume))
+            if base_volume == 0.0:
+                volumes.append(0)
+            else:
+                seasonal_factor = 1.0 + 0.1 * np.cos(2 * np.pi * (dt.month - 7) / 12)
+                volume = base_volume * seasonal_factor
+                noise = np.random.normal(0, max(0.5, volume * 0.25))
+                volume = max(1, volume + noise)
+                volumes.append(round(volume))
 
-    return pd.DataFrame({'Timestamp': date_range, 'Volume_Liter': volumes})
+    return pd.DataFrame({'Timestamp': date_range, 'Volume_Liter': volumes, 'household_id': household_id})
 
 
 # =====================================================================
 # DEMONSTRATIE: HOE DE FLEXIBELE FUNCTIES TE GEBRUIKEN
 # =====================================================================
 
-# CASE 1: Genereer de standaard historische dataset van 2 jaar (Default)
-couple_2years_df = generate_couple_water_consumption()
-print(f"Case 1 (Standaard 2 jaar) aantal rijen: {len(couple_2years_df)}")
+if __name__ == "__main__":
+    # CASE 1: Genereer de standaard historische dataset van 2 jaar (Default)
+    couple_2years_df = generate_couple_water_consumption()
+    print(f"Case 1 (Standaard 2 jaar) aantal rijen: {len(couple_2years_df)}")
 
-# CASE 2: Genereer exact 1 enkel datapunt voor het volgende uur (bijv. live streaming / realtime voorspelling)
-next_hour_index = pd.date_range(start="2026-01-01 14:00:00", end="2026-01-01 14:00:00", freq='h')
-single_datapoint_df = generate_couple_water_consumption(date_range=next_hour_index)
-print("\nCase 2 (1 specifiek uur):")
-print(single_datapoint_df)
+    # CASE 2: Genereer exact 1 enkel datapunt voor het volgende uur (bijv. live streaming / realtime voorspelling)
+    next_hour_index = pd.date_range(start="2026-01-01 14:00:00", end="2026-01-01 14:00:00", freq='h')
+    single_datapoint_df = generate_couple_water_consumption(date_range=next_hour_index)
+    print("\nCase 2 (1 specifiek uur):")
+    print(single_datapoint_df)
 
-# CASE 3: Genereer een specifiek aangepast interval (bijvoorbeeld exact 1 specifieke week)
-custom_week_index = pd.date_range(start="2025-06-01 00:00:00", end="2025-06-07 23:00:00", freq='h')
-week_df = generate_family_water_consumption(date_range=custom_week_index)
-print(f"\nCase 3 (1 specifieke week in de toekomst) aantal rijen: {len(week_df)}")
+    # CASE 3: Genereer een specifiek aangepast interval (bijvoorbeeld exact 1 specifieke week)
+    custom_week_index = pd.date_range(start="2025-06-01 00:00:00", end="2025-06-07 23:00:00", freq='h')
+    week_df = generate_family_water_consumption(date_range=custom_week_index)
+    print(f"\nCase 3 (1 specifieke week in de toekomst) aantal rijen: {len(week_df)}")
