@@ -3,7 +3,11 @@ import numpy as np
 import datetime
 from dateutil.relativedelta import relativedelta
 
-def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, base_start_date_str="2024-01-01", seed=42, household_id='couple_1', vacation_probability=0.05):
+
+def _sample_leakage_volume():
+    return _sample_leakage_volume()
+
+def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, base_start_date_str="2024-01-01", seed=42, household_id='couple_1', vacation_probability=0.05, has_leakage=False):
     """
     Generates synthetic water consumption for a couple.
     Can generate an arbitrary interval (even 1 single hour) or a default 2-year range.
@@ -14,7 +18,8 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
     :param base_start_date_str: The anchor date used to keep the water softener's 12-day cycle synchronized.
     :param seed: Random seed for reproducibility. Set to None to disable.
     :param household_id: Identifier for this household instance, used as a label in the output DataFrame.
-    :param vacation_probability: Daily probability that all household members are absent (0.0–1.0). On vacation days, human consumption is zero; the water softener still runs on its timer.
+    :param vacation_probability: Daily probability that all household members are absent (0.0-1.0). On vacation days, human consumption is zero; the water softener still runs on its timer.
+    :param has_leakage: If True, a small leakage volume replaces every zero — day and night — simulating a continuous pipe/meter leak.
     """
     # Initialize default date range if none is provided
     if date_range is None:
@@ -29,7 +34,7 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
     # Anchor date to keep track of the water softener cycle accurately over time
     anchor_date = datetime.datetime.strptime(base_start_date_str, "%Y-%m-%d").date()
 
-    # Average volume (L) when active. Hours 1–4 are 0.0 to model deep sleep: no consumption expected.
+    # Average volume (L) when active. Hours 1-4 are 0.0 to model deep sleep: no consumption expected.
     # Zero-profile hours that still fire is_active (rare, due to low but non-zero probabilities) are
     # handled by the base_volume == 0.0 guard below — preventing noise from inflating them to ≥ 1 L.
     weekday_profile = {
@@ -85,7 +90,7 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
             continue
 
         if is_vacation_day:
-            volumes.append(0)
+            volumes.append(_sample_leakage_volume() if has_leakage else 0)
             continue
 
         prob_profile = weekend_activity_prob if is_weekend else weekday_activity_prob
@@ -94,11 +99,11 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
         is_active = np.random.rand() < prob_profile[hour]
 
         if not is_active:
-            volumes.append(0)
+            volumes.append(_sample_leakage_volume() if has_leakage else 0)
         else:
             base_volume = vol_profile[hour]
             if base_volume == 0.0:
-                volumes.append(0)
+                volumes.append(_sample_leakage_volume() if has_leakage else 0)
             else:
                 # Peaks in July: couples use more water in summer (garden, outdoor activities).
                 seasonal_factor = 1.0 + 0.2 * np.cos(2 * np.pi * (dt.month - 7) / 12)
@@ -112,7 +117,7 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
     return pd.DataFrame({'Timestamp': date_range, 'Volume_Liter': volumes, 'household_id': household_id})
 
 
-def generate_family_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, base_start_date_str="2024-01-01", seed=42, household_id='family_1', vacation_probability=0.05):
+def generate_family_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, base_start_date_str="2024-01-01", seed=42, household_id='family_1', vacation_probability=0.05, has_leakage=False):
     """
     Generates synthetic water consumption for a family.
     Can generate an arbitrary interval (even 1 single hour) or a default 2-year range.
@@ -123,7 +128,8 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
     :param base_start_date_str: The anchor date used to keep the water softener's 4-day cycle synchronized.
     :param seed: Random seed for reproducibility. Set to None to disable.
     :param household_id: Identifier for this household instance, used as a label in the output DataFrame.
-    :param vacation_probability: Daily probability that all household members are absent (0.0–1.0). On vacation days, human consumption is zero; the water softener still runs on its timer.
+    :param vacation_probability: Daily probability that all household members are absent (0.0-1.0). On vacation days, human consumption is zero; the water softener still runs on its timer.
+    :param has_leakage: If True, a small leakage volume replaces every zero — day and night — simulating a continuous pipe/meter leak.
     """
     if date_range is None:
         start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d")
@@ -136,7 +142,7 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
 
     anchor_date = datetime.datetime.strptime(base_start_date_str, "%Y-%m-%d").date()
 
-    # Hours 1–4 are 0.0: deep sleep, no consumption expected. See zero-guard in the loop body.
+    # Hours 1-4 are 0.0: deep sleep, no consumption expected. See zero-guard in the loop body.
     weekday_profile = {
         0: 2.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 2.5,
         6: 8.0, 7: 25.0, 8: 20.0, 9: 10.0, 10: 8.0, 11: 9.0,
@@ -188,7 +194,7 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
             continue
 
         if is_vacation_day:
-            volumes.append(0)
+            volumes.append(_sample_leakage_volume() if has_leakage else 0)
             continue
 
         prob_profile = weekend_activity_prob if is_weekend else weekday_activity_prob
@@ -197,11 +203,11 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
         is_active = np.random.rand() < prob_profile[hour]
 
         if not is_active:
-            volumes.append(0)
+            volumes.append(_sample_leakage_volume() if has_leakage else 0)
         else:
             base_volume = vol_profile[hour]
             if base_volume == 0.0:
-                volumes.append(0)
+                volumes.append(_sample_leakage_volume() if has_leakage else 0)
             else:
                 # Peaks in July: families use significantly more water in summer (children home, garden, pool).
                 seasonal_factor = 1.0 + 0.25 * np.cos(2 * np.pi * (dt.month - 7) / 12)
@@ -214,7 +220,7 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
     return pd.DataFrame({'Timestamp': date_range, 'Volume_Liter': volumes, 'household_id': household_id})
 
 
-def generate_single_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, base_start_date_str="2024-01-01", seed=42, household_id='single_1', vacation_probability=0.05):
+def generate_single_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, base_start_date_str="2024-01-01", seed=42, household_id='single_1', vacation_probability=0.05, has_leakage=False):
     """
     Generates synthetic water consumption for a single-person household.
     Can generate an arbitrary interval (even 1 single hour) or a default 2-year range.
@@ -225,7 +231,8 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
     :param base_start_date_str: The anchor date used to keep the water softener's 24-day cycle synchronized.
     :param seed: Random seed for reproducibility. Set to None to disable.
     :param household_id: Identifier for this household instance, used as a label in the output DataFrame.
-    :param vacation_probability: Daily probability that the household member is absent (0.0–1.0). On vacation days, human consumption is zero; the water softener still runs on its timer.
+    :param vacation_probability: Daily probability that the household member is absent (0.0-1.0). On vacation days, human consumption is zero; the water softener still runs on its timer.
+    :param has_leakage: If True, a small leakage volume replaces every zero, day and night, simulating a continuous pipe/meter leak.
     """
     if date_range is None:
         start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d")
@@ -238,7 +245,7 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
 
     anchor_date = datetime.datetime.strptime(base_start_date_str, "%Y-%m-%d").date()
 
-    # Hours 1–5 (weekday) and 2–5 (weekend) are 0.0: deep sleep, no consumption expected.
+    # Hours 1-5 (weekday) and 2-5 (weekend) are 0.0: deep sleep, no consumption expected.
     # See zero-guard in the loop body.
     weekday_profile = {
         0: 2.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0,
@@ -290,7 +297,7 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
             continue
 
         if is_vacation_day:
-            volumes.append(0)
+            volumes.append(_sample_leakage_volume() if has_leakage else 0)
             continue
 
         prob_profile = weekend_activity_prob if is_weekend else weekday_activity_prob
@@ -304,11 +311,11 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
             is_active = False
 
         if not is_active:
-            volumes.append(0)
+            volumes.append(_sample_leakage_volume() if has_leakage else 0)
         else:
             base_volume = vol_profile[hour]
             if base_volume == 0.0:
-                volumes.append(0)
+                volumes.append(_sample_leakage_volume() if has_leakage else 0)
             else:
                 # Peaks in July: minor summer uptick (more showers, drinking water).
                 # Amplitude is small (0.1) since a single person has no garden or pool effect.
