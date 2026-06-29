@@ -5,7 +5,7 @@ from dateutil.relativedelta import relativedelta
 
 
 def _sample_leakage_volume():
-    return _sample_leakage_volume()
+    return round(max(1, np.random.normal(1.5, 0.5)))
 
 def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, base_start_date_str="2024-01-01", seed=42, household_id='couple_1', vacation_probability=0.05, has_leakage=False):
     """
