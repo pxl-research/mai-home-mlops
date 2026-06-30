@@ -1,3 +1,26 @@
+'''
+Detecting current leaks** (anomaly detection): water usage alone is sufficient.
+- Isolation Forest on hourly usage vectors works well for unusual consumption patterns (e.g., sustained flow at 3 AM).
+- The "at least one zero per day" heuristic is a clean rule: a slow drip keeps the meter ticking continuously, so no zero-hour within 24h is a strong leak signal. Water utilities actually use this in practice.
+- You can combine both: isolation forest catches sudden high-flow events (burst pipe), zero-gap heuristic catches slow continuous leaks.
+
+Predicting future leaks** (predictive maintenance): yes, you need more data.
+- **Pressure (bar)** is the most useful single addition. Water hammer spikes stress pipes and often precede bursts; sustained over-pressure accelerates wear. Without it, you're essentially blind to the mechanical stress that causes failures.
+- **Ambient temperature** matters too; freeze/thaw cycles are the primary cause of pipe bursts in residential settings.
+
+Recommendation**: start with **XGBoost on engineered features**. The feature engineering is where the domain knowledge lives anyway:
+- Rolling max/std of pressure over 24h, 7d windows
+- Count of hammer events (pressure delta > threshold) per day
+- Days since last freeze event
+- Cumulative pressure-above-nominal exposure
+
+This is standard in industrial predictive maintenance and gives you a solid baseline before reaching for sequence models.
+One more thing: since you control the synthetic generator, you'll need to add a **`generate_failure_precursors`** mode to it; otherwise you have no positive class to train on.
+
+ if you want genuine predictive maintenance, you need to extend your synthetic generator to simulate failure precursors (gradual pressure baseline drift, increasing spike frequency in the weeks before a burst). That gives you a labeled dataset and enables supervised prediction. Without that, you have a detector — which is still valuable, just be honest about what it is.
+
+'''
+
 import pandas as pd
 import numpy as np
 import datetime
