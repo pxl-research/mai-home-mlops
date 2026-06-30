@@ -7,7 +7,7 @@ from dateutil.relativedelta import relativedelta
 def _sample_leakage_volume():
     return round(max(1, np.random.normal(1.5, 0.5)))
 
-def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, base_start_date_str="2024-01-01", seed=42, household_id='couple_1', vacation_probability=0.05, has_leakage=False):
+def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, seed=42, household_id='couple_1', vacation_probability=0.05, has_leakage=False):
     """
     Generates synthetic water consumption for a couple.
     Can generate an arbitrary interval (even 1 single hour) or a default 2-year range.
@@ -15,11 +15,10 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
     :param date_range: Explicit pd.DatetimeIndex to generate data for. If None, uses start_date_str and years.
     :param start_date_str: Start date for default generation if date_range is None.
     :param years: Duration in years for default generation if date_range is None.
-    :param base_start_date_str: The anchor date used to keep the water softener's 12-day cycle synchronized.
     :param seed: Random seed for reproducibility. Set to None to disable.
     :param household_id: Identifier for this household instance, used as a label in the output DataFrame.
     :param vacation_probability: Daily probability that all household members are absent (0.0-1.0). On vacation days, human consumption is zero; the water softener still runs on its timer.
-    :param has_leakage: If True, a small leakage volume replaces every zero — day and night — simulating a continuous pipe/meter leak.
+    :param has_leakage: If True, a small leakage volume replaces every zero, day and night, simulating a continuous pipe/meter leak.
     """
     # Initialize default date range if none is provided
     if date_range is None:
@@ -31,12 +30,13 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
     if seed is not None:
         np.random.seed(seed)
 
-    # Anchor date to keep track of the water softener cycle accurately over time
+    # Anchor date to keep track of the water softener's 12-day cycle accurately over time
+    base_start_date_str = start_date_str
     anchor_date = datetime.datetime.strptime(base_start_date_str, "%Y-%m-%d").date()
 
     # Average volume (L) when active. Hours 1-4 are 0.0 to model deep sleep: no consumption expected.
     # Zero-profile hours that still fire is_active (rare, due to low but non-zero probabilities) are
-    # handled by the base_volume == 0.0 guard below — preventing noise from inflating them to ≥ 1 L.
+    # handled by the base_volume == 0.0 guard below, preventing noise from inflating them to ≥ 1 L.
     weekday_profile = {
         0: 1.5, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 1.5,
         6: 5.5, 7: 4.5, 8: 6.0, 9: 7.5, 10: 7.0, 11: 6.5,
@@ -117,7 +117,7 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
     return pd.DataFrame({'Timestamp': date_range, 'Volume_Liter': volumes, 'household_id': household_id})
 
 
-def generate_family_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, base_start_date_str="2024-01-01", seed=42, household_id='family_1', vacation_probability=0.05, has_leakage=False):
+def generate_family_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, seed=42, household_id='family_1', vacation_probability=0.05, has_leakage=False):
     """
     Generates synthetic water consumption for a family.
     Can generate an arbitrary interval (even 1 single hour) or a default 2-year range.
@@ -125,11 +125,10 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
     :param date_range: Explicit pd.DatetimeIndex to generate data for. If None, uses start_date_str and years.
     :param start_date_str: Start date for default generation if date_range is None.
     :param years: Duration in years for default generation if date_range is None.
-    :param base_start_date_str: The anchor date used to keep the water softener's 4-day cycle synchronized.
     :param seed: Random seed for reproducibility. Set to None to disable.
     :param household_id: Identifier for this household instance, used as a label in the output DataFrame.
     :param vacation_probability: Daily probability that all household members are absent (0.0-1.0). On vacation days, human consumption is zero; the water softener still runs on its timer.
-    :param has_leakage: If True, a small leakage volume replaces every zero — day and night — simulating a continuous pipe/meter leak.
+    :param has_leakage: If True, a small leakage volume replaces every zero, day and night, simulating a continuous pipe/meter leak.
     """
     if date_range is None:
         start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d")
@@ -140,6 +139,8 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
     if seed is not None:
         np.random.seed(seed)
 
+    # Anchor date to keep track of the water softener's 4-day cycle accurately over time
+    base_start_date_str = start_date_str
     anchor_date = datetime.datetime.strptime(base_start_date_str, "%Y-%m-%d").date()
 
     # Hours 1-4 are 0.0: deep sleep, no consumption expected. See zero-guard in the loop body.
@@ -220,7 +221,7 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
     return pd.DataFrame({'Timestamp': date_range, 'Volume_Liter': volumes, 'household_id': household_id})
 
 
-def generate_single_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, base_start_date_str="2024-01-01", seed=42, household_id='single_1', vacation_probability=0.05, has_leakage=False):
+def generate_single_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, seed=42, household_id='single_1', vacation_probability=0.05, has_leakage=False):
     """
     Generates synthetic water consumption for a single-person household.
     Can generate an arbitrary interval (even 1 single hour) or a default 2-year range.
@@ -228,7 +229,6 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
     :param date_range: Explicit pd.DatetimeIndex to generate data for. If None, uses start_date_str and years.
     :param start_date_str: Start date for default generation if date_range is None.
     :param years: Duration in years for default generation if date_range is None.
-    :param base_start_date_str: The anchor date used to keep the water softener's 24-day cycle synchronized.
     :param seed: Random seed for reproducibility. Set to None to disable.
     :param household_id: Identifier for this household instance, used as a label in the output DataFrame.
     :param vacation_probability: Daily probability that the household member is absent (0.0-1.0). On vacation days, human consumption is zero; the water softener still runs on its timer.
@@ -243,6 +243,8 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
     if seed is not None:
         np.random.seed(seed)
 
+    # Anchor date to keep track of the water softener's 24-day cycle accurately over time
+    base_start_date_str = start_date_str
     anchor_date = datetime.datetime.strptime(base_start_date_str, "%Y-%m-%d").date()
 
     # Hours 1-5 (weekday) and 2-5 (weekend) are 0.0: deep sleep, no consumption expected.
@@ -306,7 +308,7 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
         is_active = np.random.rand() < prob_profile[hour]
 
         # Single-only: 20% chance of daytime absence on weekends (shopping, sports, social).
-        # Intentionally absent from couple/family — it serves as an ML-differentiating feature.
+        # Intentionally absent from couple/family, it serves as an ML-differentiating feature.
         if is_weekend and (9 <= hour <= 21) and (np.random.rand() < 0.20):
             is_active = False
 
