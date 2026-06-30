@@ -2,10 +2,84 @@ import pandas as pd
 import numpy as np
 import datetime
 from dateutil.relativedelta import relativedelta
+import holidays as holidays_lib
 
 
 def _sample_leakage_volume():
     return round(max(1, np.random.normal(1.5, 0.5)))
+
+
+def _build_vacation_days(date_range, vacation_probability, seed):
+    """
+    Pre-compute two sets of dates for the given date_range:
+    - vacation_days: days when the household is absent (travel vacation)
+    - home_holiday_days: Belgian public holidays when people are home (not absent)
+
+    Vacation blocks are clustered in summer, prefer to start on Mondays or adjacent
+    to existing free days, and span 5-14 days each.
+    """
+    all_dates = sorted({dt.date() for dt in date_range})
+    if not all_dates:
+        return set(), set()
+
+    years = {d.year for d in all_dates}
+    be_holidays = holidays_lib.Belgium(years=years)
+    date_set = set(all_dates)
+
+    home_holiday_days = {d for d in all_dates if d in be_holidays}
+
+    target = int(vacation_probability * len(all_dates))
+    vacation_days = set()
+    budget = max(0, target)
+
+    if budget == 0:
+        return vacation_days, home_holiday_days
+
+    # Higher weight in summer, lower in mid-winter
+    month_weight = {1: 0.3, 2: 0.4, 3: 0.6, 4: 1.2, 5: 0.7, 6: 1.5,
+                    7: 3.0, 8: 3.0, 9: 1.2, 10: 0.5, 11: 0.3, 12: 0.6}
+
+    rng = np.random.RandomState(seed if seed is not None else 0)
+
+    max_attempts = 2000
+    attempts = 0
+    while budget > 0 and attempts < max_attempts:
+        attempts += 1
+        candidates = [d for d in all_dates if d not in vacation_days]
+        if not candidates:
+            break
+
+        weights = np.array([month_weight[d.month] for d in candidates], dtype=float)
+        for i, d in enumerate(candidates):
+            # Prefer Mondays (bridges a weekend)
+            if d.weekday() == 0:
+                weights[i] *= 1.8
+            # Prefer days immediately after an existing vacation/holiday (extends a block)
+            prev = d - datetime.timedelta(days=1)
+            if prev in vacation_days or prev in home_holiday_days:
+                weights[i] *= 2.5
+
+        weights /= weights.sum()
+        start = candidates[rng.choice(len(candidates), p=weights)]
+
+        # Snap Tue/Wed starts back to Monday so blocks bridge the preceding weekend
+        if start.weekday() in (1, 2):
+            start = start - datetime.timedelta(days=start.weekday())
+
+        length = int(rng.randint(5, 15))
+        block = {start + datetime.timedelta(days=i) for i in range(length)} & date_set
+        new_days = block - vacation_days
+        if not new_days:
+            continue
+
+        # Avoid overshooting the budget by more than one full block
+        if len(new_days) > budget + 14:
+            continue
+
+        vacation_days.update(new_days)
+        budget -= len(new_days)
+
+    return vacation_days, home_holiday_days
 
 def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, seed=42, household_id='couple_1', vacation_probability=0.05, has_leakage=False, stream=False):
     """
@@ -31,17 +105,18 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
     if seed is not None:
         np.random.seed(seed)
 
-    # Anchor date to keep track of the water softener's 12-day cycle accurately over time
+    # Anchor date to keep track of the water softener's cycle accurately over time
     base_start_date_str = start_date_str
     anchor_date = datetime.datetime.strptime(base_start_date_str, "%Y-%m-%d").date()
 
     # Average volume (L) when active. Hours 1-4 are 0.0 to model deep sleep: no consumption expected.
     # Zero-profile hours that still fire is_active (rare, due to low but non-zero probabilities) are
-    # handled by the base_volume == 0.0 guard below, preventing noise from inflating them to ≥ 1 L.
+    # handled by the base_volume == 0.0 guard below, preventing noise from inflating them to >= 1 L.
+    # Weekday 9-15h is low: both adults are at work.
     weekday_profile = {
         0: 1.5, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 1.5,
-        6: 5.5, 7: 4.5, 8: 6.0, 9: 7.5, 10: 7.0, 11: 6.5,
-        12: 8.5, 13: 6.5, 14: 6.5, 15: 5.0, 16: 3.5, 17: 4.0,
+        6: 4.0, 7: 5.0, 8: 4.0, 9: 1.5, 10: 1.5, 11: 1.5,
+        12: 2.5, 13: 1.5, 14: 1.5, 15: 2.0, 16: 3.5, 17: 5.0,
         18: 6.0, 19: 6.5, 20: 8.0, 21: 6.5, 22: 3.5, 23: 1.5
     }
     weekend_profile = {
@@ -52,10 +127,11 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
     }
 
     # Probability of ANY water activity happening in that hour
+    # Weekday 9-15h: very low — both adults at work.
     weekday_activity_prob = {
         0: 0.20, 1: 0.02, 2: 0.01, 3: 0.00, 4: 0.00, 5: 0.15,
-        6: 0.75, 7: 0.65, 8: 0.75, 9: 0.85, 10: 0.85, 11: 0.85,
-        12: 0.85, 13: 0.80, 14: 0.80, 15: 0.75, 16: 0.60, 17: 0.60,
+        6: 0.70, 7: 0.75, 8: 0.60, 9: 0.15, 10: 0.10, 11: 0.10,
+        12: 0.25, 13: 0.15, 14: 0.10, 15: 0.15, 16: 0.50, 17: 0.65,
         18: 0.85, 19: 0.85, 20: 0.85, 21: 0.75, 22: 0.55, 23: 0.30
     }
     weekend_activity_prob = {
@@ -67,19 +143,14 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
 
     water_softener_cycle = 7
 
+    vacation_days, home_holiday_days = _build_vacation_days(date_range, vacation_probability, seed)
+
     def _iter():
-        current_day = None
-        is_vacation_day = False
         for dt in date_range:
             hour = dt.hour
             is_weekend = dt.dayofweek >= 5
             # Calculate days since the absolute anchor date to ensure cycle consistency
             days_since_anchor = (dt.date() - anchor_date).days
-
-            # Determine once per day whether the household is on vacation
-            if dt.date() != current_day:
-                current_day = dt.date()
-                is_vacation_day = np.random.rand() < vacation_probability
 
             # Check if the water softener runs tonight
             if days_since_anchor % water_softener_cycle == 11 and hour in [3, 4]:
@@ -87,12 +158,14 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
                 yield dt, round(volume)
                 continue
 
-            if is_vacation_day:
+            if dt.date() in vacation_days:
                 yield dt, _sample_leakage_volume() if has_leakage else 0
                 continue
 
-            prob_profile = weekend_activity_prob if is_weekend else weekday_activity_prob
-            vol_profile = weekend_profile if is_weekend else weekday_profile
+            # Belgian public holidays treated like weekends: people are home
+            is_weekend_like = is_weekend or (dt.date() in home_holiday_days)
+            prob_profile = weekend_activity_prob if is_weekend_like else weekday_activity_prob
+            vol_profile = weekend_profile if is_weekend_like else weekday_profile
 
             is_active = np.random.rand() < prob_profile[hour]
 
@@ -145,15 +218,16 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
     if seed is not None:
         np.random.seed(seed)
 
-    # Anchor date to keep track of the water softener's 4-day cycle accurately over time
+    # Anchor date to keep track of the water softener's cycle accurately over time
     base_start_date_str = start_date_str
     anchor_date = datetime.datetime.strptime(base_start_date_str, "%Y-%m-%d").date()
 
     # Hours 1-4 are 0.0: deep sleep, no consumption expected. See zero-guard in the loop body.
+    # Weekday 9-14h is low: parents at work, children at school. Hour 15 spikes: kids return.
     weekday_profile = {
         0: 2.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 2.5,
-        6: 8.0, 7: 25.0, 8: 20.0, 9: 10.0, 10: 8.0, 11: 9.0,
-        12: 14.0, 13: 10.0, 14: 8.0, 15: 10.0, 16: 15.0, 17: 24.0,
+        6: 8.0, 7: 25.0, 8: 14.0, 9: 3.0, 10: 2.5, 11: 2.5,
+        12: 5.0, 13: 3.0, 14: 2.5, 15: 10.0, 16: 16.0, 17: 24.0,
         18: 28.0, 19: 25.0, 20: 16.0, 21: 10.0, 22: 5.0, 23: 3.0
     }
     weekend_profile = {
@@ -163,10 +237,11 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
         18: 24.0, 19: 22.0, 20: 18.0, 21: 12.0, 22: 7.0, 23: 4.0
     }
 
+    # Weekday 9-14h: low activity — house empty during school/work hours.
     weekday_activity_prob = {
         0: 0.25, 1: 0.02, 2: 0.01, 3: 0.00, 4: 0.00, 5: 0.20,
-        6: 0.85, 7: 0.95, 8: 0.90, 9: 0.80, 10: 0.75, 11: 0.80,
-        12: 0.90, 13: 0.80, 14: 0.75, 15: 0.80, 16: 0.85, 17: 0.95,
+        6: 0.85, 7: 0.95, 8: 0.80, 9: 0.25, 10: 0.20, 11: 0.20,
+        12: 0.35, 13: 0.25, 14: 0.20, 15: 0.75, 16: 0.85, 17: 0.95,
         18: 0.95, 19: 0.95, 20: 0.90, 21: 0.80, 22: 0.60, 23: 0.40
     }
     weekend_activity_prob = {
@@ -178,18 +253,13 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
 
     water_softener_cycle = 4
 
+    vacation_days, home_holiday_days = _build_vacation_days(date_range, vacation_probability, seed)
+
     def _iter():
-        current_day = None
-        is_vacation_day = False
         for dt in date_range:
             hour = dt.hour
             is_weekend = dt.dayofweek >= 5
             days_since_anchor = (dt.date() - anchor_date).days
-
-            # Determine once per day whether the household is on vacation
-            if dt.date() != current_day:
-                current_day = dt.date()
-                is_vacation_day = np.random.rand() < vacation_probability
 
             # Family uses a larger softener unit: 40 L + 60 L per regeneration cycle (vs. 24+40 L for couple/single).
             if days_since_anchor % water_softener_cycle == 3 and hour in [2, 3]:
@@ -197,12 +267,14 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
                 yield dt, round(volume)
                 continue
 
-            if is_vacation_day:
+            if dt.date() in vacation_days:
                 yield dt, _sample_leakage_volume() if has_leakage else 0
                 continue
 
-            prob_profile = weekend_activity_prob if is_weekend else weekday_activity_prob
-            vol_profile = weekend_profile if is_weekend else weekday_profile
+            # Belgian public holidays treated like weekends: people are home
+            is_weekend_like = is_weekend or (dt.date() in home_holiday_days)
+            prob_profile = weekend_activity_prob if is_weekend_like else weekday_activity_prob
+            vol_profile = weekend_profile if is_weekend_like else weekday_profile
 
             is_active = np.random.rand() < prob_profile[hour]
 
@@ -254,7 +326,7 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
     if seed is not None:
         np.random.seed(seed)
 
-    # Anchor date to keep track of the water softener's 24-day cycle accurately over time
+    # Anchor date to keep track of the water softener's cycle accurately over time
     base_start_date_str = start_date_str
     anchor_date = datetime.datetime.strptime(base_start_date_str, "%Y-%m-%d").date()
 
@@ -288,30 +360,27 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
 
     water_softener_cycle = 12
 
+    vacation_days, home_holiday_days = _build_vacation_days(date_range, vacation_probability, seed)
+
     def _iter():
-        current_day = None
-        is_vacation_day = False
         for dt in date_range:
             hour = dt.hour
             is_weekend = dt.dayofweek >= 5
             days_since_anchor = (dt.date() - anchor_date).days
-
-            # Determine once per day whether the household member is on vacation
-            if dt.date() != current_day:
-                current_day = dt.date()
-                is_vacation_day = np.random.rand() < vacation_probability
 
             if days_since_anchor % water_softener_cycle == 23 and hour in [3, 4]:
                 volume = (24 if hour == 3 else 40) + np.random.randint(-1, 2)
                 yield dt, round(volume)
                 continue
 
-            if is_vacation_day:
+            if dt.date() in vacation_days:
                 yield dt, _sample_leakage_volume() if has_leakage else 0
                 continue
 
-            prob_profile = weekend_activity_prob if is_weekend else weekday_activity_prob
-            vol_profile = weekend_profile if is_weekend else weekday_profile
+            # Belgian public holidays treated like weekends: people are home
+            is_weekend_like = is_weekend or (dt.date() in home_holiday_days)
+            prob_profile = weekend_activity_prob if is_weekend_like else weekday_activity_prob
+            vol_profile = weekend_profile if is_weekend_like else weekday_profile
 
             is_active = np.random.rand() < prob_profile[hour]
 
