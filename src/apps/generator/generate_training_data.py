@@ -119,7 +119,7 @@ def _iter_hourly(
 
         is_active = np.random.rand() < prob_profile[hour]
 
-        if extra_absence_check is not None and extra_absence_check(is_weekend, hour):
+        if extra_absence_check is not None and extra_absence_check(dt, is_weekend, hour):
             is_active = False
 
         if not is_active:
@@ -324,10 +324,17 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
         18: 0.65, 19: 0.75, 20: 0.80, 21: 0.70, 22: 0.55, 23: 0.30
     }
 
-    # Single-only: 20% chance of daytime absence on weekends (shopping, sports, social).
+    # Single-only: 20% chance of being out all daytime on a given weekend day (shopping, sports, social).
+    # Rolled once per weekend day so absence spans the whole 9-21h block, not per-hour flickering.
     # Intentionally absent from couple/family, it serves as an ML-differentiating feature.
-    def _single_absence(is_weekend, hour):
-        return is_weekend and (9 <= hour <= 21) and (np.random.rand() < 0.20)
+    rng_absence = np.random.RandomState((seed if seed is not None else 0) + 7)
+    single_daytime_off_days = {
+        d.date() for d in date_range
+        if d.dayofweek >= 5 and rng_absence.rand() < 0.20
+    }
+
+    def _single_absence(dt, is_weekend, hour):
+        return (dt.date() in single_daytime_off_days) and (9 <= hour <= 21)
 
     return _to_dataframe(
         lambda: _iter_hourly(
