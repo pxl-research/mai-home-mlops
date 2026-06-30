@@ -65,7 +65,7 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
         18: 0.50, 19: 0.60, 20: 0.85, 21: 0.70, 22: 0.60, 23: 0.30
     }
 
-    water_softener_cycle = 12
+    water_softener_cycle = 7
 
     def _iter():
         current_day = None
@@ -286,7 +286,7 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
         18: 0.65, 19: 0.75, 20: 0.80, 21: 0.70, 22: 0.55, 23: 0.30
     }
 
-    water_softener_cycle = 24
+    water_softener_cycle = 12
 
     def _iter():
         current_day = None
