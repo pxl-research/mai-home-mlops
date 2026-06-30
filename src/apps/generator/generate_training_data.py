@@ -7,7 +7,7 @@ from dateutil.relativedelta import relativedelta
 def _sample_leakage_volume():
     return round(max(1, np.random.normal(1.5, 0.5)))
 
-def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, seed=42, household_id='couple_1', vacation_probability=0.05, has_leakage=False):
+def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, seed=42, household_id='couple_1', vacation_probability=0.05, has_leakage=False, stream=False):
     """
     Generates synthetic water consumption for a couple.
     Can generate an arbitrary interval (even 1 single hour) or a default 2-year range.
@@ -19,6 +19,7 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
     :param household_id: Identifier for this household instance, used as a label in the output DataFrame.
     :param vacation_probability: Daily probability that all household members are absent (0.0-1.0). On vacation days, human consumption is zero; the water softener still runs on its timer.
     :param has_leakage: If True, a small leakage volume replaces every zero, day and night, simulating a continuous pipe/meter leak.
+    :param stream: If False (default), returns a complete DataFrame. If True, returns a generator that yields one single-row DataFrame per hour.
     """
     # Initialize default date range if none is provided
     if date_range is None:
@@ -64,60 +65,64 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
         18: 0.50, 19: 0.60, 20: 0.85, 21: 0.70, 22: 0.60, 23: 0.30
     }
 
-    volumes = []
     water_softener_cycle = 12
-    current_day = None
-    is_vacation_day = False
 
-    for dt in date_range:
-        hour = dt.hour
-        is_weekend = dt.dayofweek >= 5
-        # Calculate days since the absolute anchor date to ensure cycle consistency
-        days_since_anchor = (dt.date() - anchor_date).days
+    def _iter():
+        current_day = None
+        is_vacation_day = False
+        for dt in date_range:
+            hour = dt.hour
+            is_weekend = dt.dayofweek >= 5
+            # Calculate days since the absolute anchor date to ensure cycle consistency
+            days_since_anchor = (dt.date() - anchor_date).days
 
-        # Determine once per day whether the household is on vacation
-        if dt.date() != current_day:
-            current_day = dt.date()
-            is_vacation_day = np.random.rand() < vacation_probability
+            # Determine once per day whether the household is on vacation
+            if dt.date() != current_day:
+                current_day = dt.date()
+                is_vacation_day = np.random.rand() < vacation_probability
 
-        # Check if the water softener runs tonight
-        if days_since_anchor % water_softener_cycle == 11 and hour in [3, 4]:
-            if hour == 3:
-                volume = 24 + np.random.randint(-2, 3)
-            elif hour == 4:
-                volume = 40 + np.random.randint(-2, 3)
-            volumes.append(round(volume))
-            continue
+            # Check if the water softener runs tonight
+            if days_since_anchor % water_softener_cycle == 11 and hour in [3, 4]:
+                volume = (24 if hour == 3 else 40) + np.random.randint(-2, 3)
+                yield dt, round(volume)
+                continue
 
-        if is_vacation_day:
-            volumes.append(_sample_leakage_volume() if has_leakage else 0)
-            continue
+            if is_vacation_day:
+                yield dt, _sample_leakage_volume() if has_leakage else 0
+                continue
 
-        prob_profile = weekend_activity_prob if is_weekend else weekday_activity_prob
-        vol_profile = weekend_profile if is_weekend else weekday_profile
+            prob_profile = weekend_activity_prob if is_weekend else weekday_activity_prob
+            vol_profile = weekend_profile if is_weekend else weekday_profile
 
-        is_active = np.random.rand() < prob_profile[hour]
+            is_active = np.random.rand() < prob_profile[hour]
 
-        if not is_active:
-            volumes.append(_sample_leakage_volume() if has_leakage else 0)
-        else:
-            base_volume = vol_profile[hour]
-            if base_volume == 0.0:
-                volumes.append(_sample_leakage_volume() if has_leakage else 0)
+            if not is_active:
+                yield dt, _sample_leakage_volume() if has_leakage else 0
             else:
-                # Peaks in July: couples use more water in summer (garden, outdoor activities).
-                seasonal_factor = 1.0 + 0.2 * np.cos(2 * np.pi * (dt.month - 7) / 12)
-                volume = base_volume * seasonal_factor
-                # Noise std dev is lowest for couples (15%): two-person routine is more predictable.
-                # Ordering across types: couple (15%) < family (20%) < single (25%).
-                noise = np.random.normal(0, max(0.5, volume * 0.15))
-                volume = max(1, volume + noise)
-                volumes.append(round(volume))
+                base_volume = vol_profile[hour]
+                if base_volume == 0.0:
+                    yield dt, _sample_leakage_volume() if has_leakage else 0
+                else:
+                    # Peaks in July: couples use more water in summer (garden, outdoor activities).
+                    seasonal_factor = 1.0 + 0.2 * np.cos(2 * np.pi * (dt.month - 7) / 12)
+                    volume = base_volume * seasonal_factor
+                    # Noise std dev is lowest for couples (15%): two-person routine is more predictable.
+                    # Ordering across types: couple (15%) < family (20%) < single (25%).
+                    noise = np.random.normal(0, max(0.5, volume * 0.15))
+                    yield dt, round(max(1, volume + noise))
 
-    return pd.DataFrame({'Timestamp': date_range, 'Volume_Liter': volumes, 'household_id': household_id})
+    if stream:
+        return (pd.DataFrame({'Timestamp': [dt], 'Volume_Liter': [vol], 'household_id': household_id})
+                for dt, vol in _iter())
+
+    timestamps, volumes = [], []
+    for dt, vol in _iter():
+        timestamps.append(dt)
+        volumes.append(vol)
+    return pd.DataFrame({'Timestamp': timestamps, 'Volume_Liter': volumes, 'household_id': household_id})
 
 
-def generate_family_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, seed=42, household_id='family_1', vacation_probability=0.05, has_leakage=False):
+def generate_family_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, seed=42, household_id='family_1', vacation_probability=0.05, has_leakage=False, stream=False):
     """
     Generates synthetic water consumption for a family.
     Can generate an arbitrary interval (even 1 single hour) or a default 2-year range.
@@ -129,6 +134,7 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
     :param household_id: Identifier for this household instance, used as a label in the output DataFrame.
     :param vacation_probability: Daily probability that all household members are absent (0.0-1.0). On vacation days, human consumption is zero; the water softener still runs on its timer.
     :param has_leakage: If True, a small leakage volume replaces every zero, day and night, simulating a continuous pipe/meter leak.
+    :param stream: If False (default), returns a complete DataFrame. If True, returns a generator that yields one single-row DataFrame per hour.
     """
     if date_range is None:
         start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d")
@@ -170,58 +176,62 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
         18: 0.95, 19: 0.95, 20: 0.95, 21: 0.85, 22: 0.70, 23: 0.50
     }
 
-    volumes = []
     water_softener_cycle = 4
-    current_day = None
-    is_vacation_day = False
 
-    for dt in date_range:
-        hour = dt.hour
-        is_weekend = dt.dayofweek >= 5
-        days_since_anchor = (dt.date() - anchor_date).days
+    def _iter():
+        current_day = None
+        is_vacation_day = False
+        for dt in date_range:
+            hour = dt.hour
+            is_weekend = dt.dayofweek >= 5
+            days_since_anchor = (dt.date() - anchor_date).days
 
-        # Determine once per day whether the household is on vacation
-        if dt.date() != current_day:
-            current_day = dt.date()
-            is_vacation_day = np.random.rand() < vacation_probability
+            # Determine once per day whether the household is on vacation
+            if dt.date() != current_day:
+                current_day = dt.date()
+                is_vacation_day = np.random.rand() < vacation_probability
 
-        # Family uses a larger softener unit: 40 L + 60 L per regeneration cycle (vs. 24+40 L for couple/single).
-        if days_since_anchor % water_softener_cycle == 3 and hour in [2, 3]:
-            if hour == 2:
-                volume = 40 + np.random.randint(-3, 4)
-            elif hour == 3:
-                volume = 60 + np.random.randint(-3, 4)
-            volumes.append(round(volume))
-            continue
+            # Family uses a larger softener unit: 40 L + 60 L per regeneration cycle (vs. 24+40 L for couple/single).
+            if days_since_anchor % water_softener_cycle == 3 and hour in [2, 3]:
+                volume = (40 if hour == 2 else 60) + np.random.randint(-3, 4)
+                yield dt, round(volume)
+                continue
 
-        if is_vacation_day:
-            volumes.append(_sample_leakage_volume() if has_leakage else 0)
-            continue
+            if is_vacation_day:
+                yield dt, _sample_leakage_volume() if has_leakage else 0
+                continue
 
-        prob_profile = weekend_activity_prob if is_weekend else weekday_activity_prob
-        vol_profile = weekend_profile if is_weekend else weekday_profile
+            prob_profile = weekend_activity_prob if is_weekend else weekday_activity_prob
+            vol_profile = weekend_profile if is_weekend else weekday_profile
 
-        is_active = np.random.rand() < prob_profile[hour]
+            is_active = np.random.rand() < prob_profile[hour]
 
-        if not is_active:
-            volumes.append(_sample_leakage_volume() if has_leakage else 0)
-        else:
-            base_volume = vol_profile[hour]
-            if base_volume == 0.0:
-                volumes.append(_sample_leakage_volume() if has_leakage else 0)
+            if not is_active:
+                yield dt, _sample_leakage_volume() if has_leakage else 0
             else:
-                # Peaks in July: families use significantly more water in summer (children home, garden, pool).
-                seasonal_factor = 1.0 + 0.25 * np.cos(2 * np.pi * (dt.month - 7) / 12)
-                volume = base_volume * seasonal_factor
-                # Noise std dev 20%: more variable than couple (more occupants, less predictable overlap).
-                noise = np.random.normal(0, max(0.5, volume * 0.20))
-                volume = max(1, volume + noise)
-                volumes.append(round(volume))
+                base_volume = vol_profile[hour]
+                if base_volume == 0.0:
+                    yield dt, _sample_leakage_volume() if has_leakage else 0
+                else:
+                    # Peaks in July: families use significantly more water in summer (children home, garden, pool).
+                    seasonal_factor = 1.0 + 0.25 * np.cos(2 * np.pi * (dt.month - 7) / 12)
+                    volume = base_volume * seasonal_factor
+                    # Noise std dev 20%: more variable than couple (more occupants, less predictable overlap).
+                    noise = np.random.normal(0, max(0.5, volume * 0.20))
+                    yield dt, round(max(1, volume + noise))
 
-    return pd.DataFrame({'Timestamp': date_range, 'Volume_Liter': volumes, 'household_id': household_id})
+    if stream:
+        return (pd.DataFrame({'Timestamp': [dt], 'Volume_Liter': [vol], 'household_id': household_id})
+                for dt, vol in _iter())
+
+    timestamps, volumes = [], []
+    for dt, vol in _iter():
+        timestamps.append(dt)
+        volumes.append(vol)
+    return pd.DataFrame({'Timestamp': timestamps, 'Volume_Liter': volumes, 'household_id': household_id})
 
 
-def generate_single_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, seed=42, household_id='single_1', vacation_probability=0.05, has_leakage=False):
+def generate_single_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, seed=42, household_id='single_1', vacation_probability=0.05, has_leakage=False, stream=False):
     """
     Generates synthetic water consumption for a single-person household.
     Can generate an arbitrary interval (even 1 single hour) or a default 2-year range.
@@ -233,6 +243,7 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
     :param household_id: Identifier for this household instance, used as a label in the output DataFrame.
     :param vacation_probability: Daily probability that the household member is absent (0.0-1.0). On vacation days, human consumption is zero; the water softener still runs on its timer.
     :param has_leakage: If True, a small leakage volume replaces every zero, day and night, simulating a continuous pipe/meter leak.
+    :param stream: If False (default), returns a complete DataFrame. If True, returns a generator that yields one single-row DataFrame per hour.
     """
     if date_range is None:
         start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d")
@@ -275,60 +286,64 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
         18: 0.65, 19: 0.75, 20: 0.80, 21: 0.70, 22: 0.55, 23: 0.30
     }
 
-    volumes = []
     water_softener_cycle = 24
-    current_day = None
-    is_vacation_day = False
 
-    for dt in date_range:
-        hour = dt.hour
-        is_weekend = dt.dayofweek >= 5
-        days_since_anchor = (dt.date() - anchor_date).days
+    def _iter():
+        current_day = None
+        is_vacation_day = False
+        for dt in date_range:
+            hour = dt.hour
+            is_weekend = dt.dayofweek >= 5
+            days_since_anchor = (dt.date() - anchor_date).days
 
-        # Determine once per day whether the household member is on vacation
-        if dt.date() != current_day:
-            current_day = dt.date()
-            is_vacation_day = np.random.rand() < vacation_probability
+            # Determine once per day whether the household member is on vacation
+            if dt.date() != current_day:
+                current_day = dt.date()
+                is_vacation_day = np.random.rand() < vacation_probability
 
-        if days_since_anchor % water_softener_cycle == 23 and hour in [3, 4]:
-            if hour == 3:
-                volume = 24 + np.random.randint(-1, 2)
-            elif hour == 4:
-                volume = 40 + np.random.randint(-1, 2)
-            volumes.append(round(volume))
-            continue
+            if days_since_anchor % water_softener_cycle == 23 and hour in [3, 4]:
+                volume = (24 if hour == 3 else 40) + np.random.randint(-1, 2)
+                yield dt, round(volume)
+                continue
 
-        if is_vacation_day:
-            volumes.append(_sample_leakage_volume() if has_leakage else 0)
-            continue
+            if is_vacation_day:
+                yield dt, _sample_leakage_volume() if has_leakage else 0
+                continue
 
-        prob_profile = weekend_activity_prob if is_weekend else weekday_activity_prob
-        vol_profile = weekend_profile if is_weekend else weekday_profile
+            prob_profile = weekend_activity_prob if is_weekend else weekday_activity_prob
+            vol_profile = weekend_profile if is_weekend else weekday_profile
 
-        is_active = np.random.rand() < prob_profile[hour]
+            is_active = np.random.rand() < prob_profile[hour]
 
-        # Single-only: 20% chance of daytime absence on weekends (shopping, sports, social).
-        # Intentionally absent from couple/family, it serves as an ML-differentiating feature.
-        if is_weekend and (9 <= hour <= 21) and (np.random.rand() < 0.20):
-            is_active = False
+            # Single-only: 20% chance of daytime absence on weekends (shopping, sports, social).
+            # Intentionally absent from couple/family, it serves as an ML-differentiating feature.
+            if is_weekend and (9 <= hour <= 21) and (np.random.rand() < 0.20):
+                is_active = False
 
-        if not is_active:
-            volumes.append(_sample_leakage_volume() if has_leakage else 0)
-        else:
-            base_volume = vol_profile[hour]
-            if base_volume == 0.0:
-                volumes.append(_sample_leakage_volume() if has_leakage else 0)
+            if not is_active:
+                yield dt, _sample_leakage_volume() if has_leakage else 0
             else:
-                # Peaks in July: minor summer uptick (more showers, drinking water).
-                # Amplitude is small (0.1) since a single person has no garden or pool effect.
-                seasonal_factor = 1.0 + 0.1 * np.cos(2 * np.pi * (dt.month - 7) / 12)
-                volume = base_volume * seasonal_factor
-                # Noise std dev is highest for singles (25%): irregular lifestyle produces most variability.
-                noise = np.random.normal(0, max(0.5, volume * 0.25))
-                volume = max(1, volume + noise)
-                volumes.append(round(volume))
+                base_volume = vol_profile[hour]
+                if base_volume == 0.0:
+                    yield dt, _sample_leakage_volume() if has_leakage else 0
+                else:
+                    # Peaks in July: minor summer uptick (more showers, drinking water).
+                    # Amplitude is small (0.1) since a single person has no garden or pool effect.
+                    seasonal_factor = 1.0 + 0.1 * np.cos(2 * np.pi * (dt.month - 7) / 12)
+                    volume = base_volume * seasonal_factor
+                    # Noise std dev is highest for singles (25%): irregular lifestyle produces most variability.
+                    noise = np.random.normal(0, max(0.5, volume * 0.25))
+                    yield dt, round(max(1, volume + noise))
 
-    return pd.DataFrame({'Timestamp': date_range, 'Volume_Liter': volumes, 'household_id': household_id})
+    if stream:
+        return (pd.DataFrame({'Timestamp': [dt], 'Volume_Liter': [vol], 'household_id': household_id})
+                for dt, vol in _iter())
+
+    timestamps, volumes = [], []
+    for dt, vol in _iter():
+        timestamps.append(dt)
+        volumes.append(vol)
+    return pd.DataFrame({'Timestamp': timestamps, 'Volume_Liter': volumes, 'household_id': household_id})
 
 
 # =====================================================================
@@ -350,3 +365,12 @@ if __name__ == "__main__":
     custom_week_index = pd.date_range(start="2025-06-01 00:00:00", end="2025-06-07 23:00:00", freq='h')
     week_df = generate_family_water_consumption(date_range=custom_week_index)
     print(f"\nCase 3 (1 specifieke week in de toekomst) aantal rijen: {len(week_df)}")
+
+    # CASE 4: Iteratieve modus: voeg 1 uur per keer toe aan de dataframe (stream=True)
+    hourly_index = pd.date_range(start="2026-06-01 00:00:00", periods=5, freq='h')
+    gen = generate_single_water_consumption(date_range=hourly_index, stream=True)
+    accumulated = pd.DataFrame()
+    print("\nCase 4 (Iteratief, 1 uur per keer):")
+    for hourly_df in gen:
+        accumulated = pd.concat([accumulated, hourly_df], ignore_index=True)
+        print(accumulated.tail(1).to_string(index=False))
