@@ -97,15 +97,21 @@ def _iter_hourly(
     seasonal_amplitude, noise_fraction,
     extra_absence_check=None,
 ):
+    softener_split = {}  # date → (vol_hour0, vol_hour1) rolled once per cycle
+
     for dt in date_range:
         hour = dt.hour
         is_weekend = dt.dayofweek >= 5
         days_since_anchor = (dt.date() - anchor_date).days
 
         if days_since_anchor % softener_cycle == softener_offset and hour in softener_hours:
-            vol_base = softener_volumes[softener_hours.index(hour)]
-            volume = vol_base + np.random.randint(*softener_jitter)
-            yield dt, round(volume)
+            idx = softener_hours.index(hour)
+            if idx == 0:
+                jitter = np.random.randint(*softener_jitter)
+                total = sum(softener_volumes) + jitter
+                v0 = round(total * softener_volumes[0] / sum(softener_volumes))
+                softener_split[dt.date()] = (v0, total - v0)
+            yield dt, softener_split[dt.date()][idx]
             continue
 
         if dt.date() in vacation_days:
