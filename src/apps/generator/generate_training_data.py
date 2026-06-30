@@ -106,9 +106,9 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
                     # Peaks in July: couples use more water in summer (garden, outdoor activities).
                     seasonal_factor = 1.0 + 0.2 * np.cos(2 * np.pi * (dt.month - 7) / 12)
                     volume = base_volume * seasonal_factor
-                    # Noise std dev is lowest for couples (15%): two-person routine is more predictable.
-                    # Ordering across types: couple (15%) < family (20%) < single (25%).
-                    noise = np.random.normal(0, max(0.5, volume * 0.15))
+                    # Noise std dev is lowest for couples (10%): two-person routine is more predictable.
+                    # Ordering across types: couple (10%) < family (15%) < single (20%).
+                    noise = np.random.normal(0, max(0.5, volume * 0.10))
                     yield dt, round(max(1, volume + noise))
 
     if stream:
@@ -216,8 +216,8 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
                     # Peaks in July: families use significantly more water in summer (children home, garden, pool).
                     seasonal_factor = 1.0 + 0.25 * np.cos(2 * np.pi * (dt.month - 7) / 12)
                     volume = base_volume * seasonal_factor
-                    # Noise std dev 20%: more variable than couple (more occupants, less predictable overlap).
-                    noise = np.random.normal(0, max(0.5, volume * 0.20))
+                    # Noise std dev 15%: more variable than couple (more occupants, less predictable overlap).
+                    noise = np.random.normal(0, max(0.5, volume * 0.15))
                     yield dt, round(max(1, volume + noise))
 
     if stream:
@@ -331,8 +331,8 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
                     # Amplitude is small (0.1) since a single person has no garden or pool effect.
                     seasonal_factor = 1.0 + 0.1 * np.cos(2 * np.pi * (dt.month - 7) / 12)
                     volume = base_volume * seasonal_factor
-                    # Noise std dev is highest for singles (25%): irregular lifestyle produces most variability.
-                    noise = np.random.normal(0, max(0.5, volume * 0.25))
+                    # Noise std dev is highest for singles (20%): irregular lifestyle produces most variability.
+                    noise = np.random.normal(0, max(0.5, volume * 0.20))
                     yield dt, round(max(1, volume + noise))
 
     if stream:
