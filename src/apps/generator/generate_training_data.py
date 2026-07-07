@@ -41,6 +41,7 @@ import numpy as np
 import datetime
 from dateutil.relativedelta import relativedelta
 import holidays as holidays_lib
+from sklearn.ensemble import IsolationForest
 
 
 def _sample_leakage_volume():
@@ -560,6 +561,67 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
     )
 
 
+def _build_daily_features(df):
+    """
+    Aggregates hourly readings into per-day features for leak detection.
+    Night hours (1-4) are the deep-sleep window: any non-zero flow there is suspicious.
+    """
+    df = df.copy()
+    df['date'] = df['Timestamp'].dt.date
+    df['hour'] = df['Timestamp'].dt.hour
+    df['is_night'] = df['hour'].between(1, 4)
+
+    daily = df.groupby('date')['Volume_Liter'].agg(
+        total_daily_volume='sum',
+        zero_ratio_all=lambda s: (s == 0).mean(),
+    ).reset_index()
+
+    night = df[df['is_night']].groupby('date')['Volume_Liter'].agg(
+        night_min='min',
+        night_mean='mean',
+        night_zero_ratio=lambda s: (s == 0).mean(),
+    ).reset_index()
+
+    day = df[~df['is_night']].groupby('date')['Volume_Liter'].min().rename('day_min').reset_index()
+
+    features = daily.merge(night, on='date', how='left').merge(day, on='date', how='left')
+    features['rolling_7d_night_min'] = features['night_min'].rolling(7, min_periods=1).min()
+    return features
+
+
+_ISOLATION_FOREST_FEATURE_COLS = [
+    'night_min', 'night_zero_ratio', 'night_mean',
+    'rolling_7d_night_min', 'day_min', 'total_daily_volume', 'zero_ratio_all',
+]
+
+
+def _train_isolation_forest(features, contamination=0.01):
+    model = IsolationForest(contamination=contamination, random_state=42)
+    model.fit(features[_ISOLATION_FOREST_FEATURE_COLS])
+    return model
+
+
+def _detect_leak_isolation_forest(model, features):
+    scores = model.decision_function(features[_ISOLATION_FOREST_FEATURE_COLS])  # lower = more anomalous
+    predictions = model.predict(features[_ISOLATION_FOREST_FEATURE_COLS])       # -1 = anomaly, 1 = normal
+    features = features.copy()
+    features['anomaly_score'] = scores
+    features['is_anomaly'] = predictions == -1
+    return features
+
+
+def _zero_gap_heuristic(df, night_hours=(1, 4), window_days=3, threshold=0):
+    """
+    A slow drip keeps the meter ticking continuously, so once no zero-hour shows up
+    within a rolling window of consecutive nights, a leak is likely.
+    """
+    night = df[df['Timestamp'].dt.hour.between(*night_hours)].copy()
+    night['date'] = night['Timestamp'].dt.date
+    daily_min = night.groupby('date')['Volume_Liter'].min()
+    rolling_min = daily_min.rolling(window_days, min_periods=1).min()
+    return (rolling_min > threshold).rename('zero_gap_flag').reset_index()
+
+
 # =====================================================================
 # DEMONSTRATIE: HOE DE FLEXIBELE FUNCTIES TE GEBRUIKEN
 # =====================================================================
@@ -606,3 +668,23 @@ if __name__ == "__main__":
 
     print(f"\n  Sample temperature range: Jan mean={failure_df[failure_df['Timestamp'].dt.month == 1]['temperature_c'].mean():.1f}°C  "
           f"Jul mean={failure_df[failure_df['Timestamp'].dt.month == 7]['temperature_c'].mean():.1f}°C")
+
+    # CASE 6: Isolation Forest (unusual consumption patterns) + zero-gap heuristic (continuous drip),
+    # trained on one clean year and evaluated on one year with a simulated continuous leak.
+    print("\nCase 6 (Isolation Forest + zero-gap heuristic leak detection, 1 year train / 1 year test):")
+
+    clean_year_df = generate_couple_water_consumption(start_date_str="2025-01-01", years=1, seed=100, has_leakage=False)
+    leaky_year_df = generate_couple_water_consumption(start_date_str="2026-01-01", years=1, seed=200, has_leakage=True)
+
+    train_features = _build_daily_features(clean_year_df)
+    test_features = _build_daily_features(leaky_year_df)
+
+    forest = _train_isolation_forest(train_features)
+    test_scored = _detect_leak_isolation_forest(forest, test_features)
+    test_scored = test_scored.merge(_zero_gap_heuristic(leaky_year_df), on='date', how='left')
+    test_scored['combined_flag'] = test_scored['is_anomaly'] | test_scored['zero_gap_flag']
+
+    n_days = len(test_scored)
+    print(f"  Days flagged by Isolation Forest:  {test_scored['is_anomaly'].sum()} / {n_days}")
+    print(f"  Days flagged by zero-gap heuristic: {test_scored['zero_gap_flag'].sum()} / {n_days}")
+    print(f"  Days flagged by either (combined):  {test_scored['combined_flag'].sum()} / {n_days}")
