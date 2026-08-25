@@ -1,72 +1,41 @@
 '''
-Detecting current leaks** (anomaly detection): water usage alone is sufficient.
+Detecting current leaks (anomaly detection): water usage alone is sufficient.
 - Isolation Forest on hourly usage vectors works well for unusual consumption patterns (e.g., sustained flow at 3 AM).
 - The "at least one zero per day" heuristic is a clean rule: a slow drip keeps the meter ticking continuously, so no zero-hour within 24h is a strong leak signal. Water utilities actually use this in practice.
 - You can combine both: isolation forest catches sudden high-flow events (burst pipe), zero-gap heuristic catches slow continuous leaks.
 
-Predicting future leaks** (predictive maintenance): yes, you need more data.
-- **Pressure (bar)** is the most useful single addition. Water hammer spikes stress pipes and often precede bursts; sustained over-pressure accelerates wear. Without it, you're essentially blind to the mechanical stress that causes failures.
-- **Ambient temperature** matters too; freeze/thaw cycles are the primary cause of pipe bursts in residential settings.
-
-Recommendation**: start with **XGBoost on engineered features**. The feature engineering is where the domain knowledge lives anyway:
-- Rolling max/std of pressure over 24h, 7d windows
-- Count of hammer events (pressure delta > threshold) per day
-- Days since last freeze event
-- Cumulative pressure-above-nominal exposure
-
-This is standard in industrial predictive maintenance and gives you a solid baseline before reaching for sequence models.
-One more thing: since you control the synthetic generator, you'll need to add a **`generate_failure_precursors`** mode to it; otherwise you have no positive class to train on.
-
- if you want genuine predictive maintenance, you need to extend your synthetic generator to simulate failure precursors (gradual pressure baseline drift, increasing spike frequency in the weeks before a burst). That gives you a labeled dataset and enables supervised prediction. Without that, you have a detector — which is still valuable, just be honest about what it is.
-
-The number of distinct pipe burst events to simulate within the generated date range.
-
-With `n_failures=2` over a 2-year range, the generator:
-1. Picks 2 random dates (spaced far enough apart that their windows don't overlap)
-2. For each one, marks the 14 days before it as precursor (`leak_label=1`) and 1–3 days of actual burst (`leak_label=2`)
-3. Everything else is `leak_label=0`
-
-Default is `n_failures=0` — clean data, no failures at all.
-
-For a 1-year training set you'd typically want 3-5 failures to give the model enough positive-class examples.
-With `n_failures=2` you get only 624 precursor hours and 72 failure hours out of 17 544,
-that's a heavily imbalanced dataset.
-For XGBoost that's manageable with `scale_pos_weight`,
-but you'd get a richer training set with `n_failures=5` (the generator spaces them automatically so they don't overlap).
-
+NOTE: 2 households per category (these are the household_id's) and should be selectable via dropdown in Grafana:
+* single_be
+* single_nl
+* couple_be
+* couple_nl
+* family_be
+* family_nl
 '''
-
 import pandas as pd
 import numpy as np
 import datetime
 from dateutil.relativedelta import relativedelta
 import holidays as holidays_lib
-from sklearn.ensemble import IsolationForest
 
 
 def _sample_leakage_volume():
     return round(max(1, np.random.normal(1.5, 0.5)))
 
 
-def _build_vacation_days(date_range, vacation_probability, seed):
-    """
-    Pre-compute two sets of dates for the given date_range:
-    - vacation_days: days when the household is absent (travel vacation)
-    - home_holiday_days: Belgian public holidays when people are home (not absent)
-
-    Vacation blocks are clustered in summer, prefer to start on Mondays or adjacent
-    to existing free days, and span 5-14 days each.
-    """
+def _build_vacation_days(date_range, vacation_probability, seed, country="be"):
     all_dates = sorted({dt.date() for dt in date_range})
     if not all_dates:
         return set(), set()
 
     years = {d.year for d in all_dates}
-    be_holidays = holidays_lib.Belgium(years=years)
+    if country.lower() == "nl":
+        holidays_list = holidays_lib.Netherlands(years=years)
+    else:
+        holidays_list = holidays_lib.Belgium(years=years)
+
     date_set = set(all_dates)
-
-    home_holiday_days = {d for d in all_dates if d in be_holidays}
-
+    home_holiday_days = {d for d in all_dates if d in holidays_list}
     target = int(vacation_probability * len(all_dates))
     vacation_days = set()
     budget = max(0, target)
@@ -74,7 +43,6 @@ def _build_vacation_days(date_range, vacation_probability, seed):
     if budget == 0:
         return vacation_days, home_holiday_days
 
-    # Higher weight in summer, lower in mid-winter
     month_weight = {1: 0.3, 2: 0.4, 3: 0.6, 4: 1.2, 5: 0.7, 6: 1.5,
                     7: 3.0, 8: 3.0, 9: 1.2, 10: 0.5, 11: 0.3, 12: 0.6}
 
@@ -90,10 +58,8 @@ def _build_vacation_days(date_range, vacation_probability, seed):
 
         weights = np.array([month_weight[d.month] for d in candidates], dtype=float)
         for i, d in enumerate(candidates):
-            # Prefer Mondays or Fridays (bridges a weekend)
             if d.weekday() == 0 or d.weekday() == 4:
                 weights[i] *= 1.8
-            # Prefer days immediately after an existing vacation/holiday (extends a block)
             prev = d - datetime.timedelta(days=1)
             if prev in vacation_days or prev in home_holiday_days:
                 weights[i] *= 2.5
@@ -101,7 +67,6 @@ def _build_vacation_days(date_range, vacation_probability, seed):
         weights /= weights.sum()
         start = candidates[rng.choice(len(candidates), p=weights)]
 
-        # Snap Tue/Wed starts back to Monday so blocks bridge the preceding weekend
         if start.weekday() in (1, 2):
             start = start - datetime.timedelta(days=start.weekday())
 
@@ -111,7 +76,6 @@ def _build_vacation_days(date_range, vacation_probability, seed):
         if not new_days:
             continue
 
-        # Avoid overshooting the budget by more than one full block
         if len(new_days) > budget + 14:
             continue
 
@@ -119,79 +83,6 @@ def _build_vacation_days(date_range, vacation_probability, seed):
         budget -= len(new_days)
 
     return vacation_days, home_holiday_days
-
-
-def _build_failure_events(date_range, vacation_days, n_failures, precursor_days, seed):
-    """
-    Pre-compute failure events and their precursor windows.
-
-    Returns:
-      precursor_progress: dict[date, float]  -- 0.0 (start of window) to <1.0 (day before failure)
-      failure_dates:      set[date]           -- active burst days (leak_label=2)
-      failure_volume:     dict[date, int]     -- extra L/hr added on top of normal usage during failure
-    """
-    precursor_progress = {}
-    failure_dates = set()
-    failure_volume = {}
-
-    if n_failures <= 0:
-        return precursor_progress, failure_dates, failure_volume
-
-    all_dates = sorted({dt.date() for dt in date_range})
-    if not all_dates:
-        return precursor_progress, failure_dates, failure_volume
-
-    failure_max_duration = 3
-    min_gap = precursor_days * 2 + failure_max_duration
-    edge = precursor_days + 5
-
-    eligible = [
-        d for d in all_dates[edge:-edge]
-        if d not in vacation_days
-    ]
-
-    if not eligible:
-        return precursor_progress, failure_dates, failure_volume
-
-    rng = np.random.RandomState((seed if seed is not None else 0) + 11)
-
-    chosen_failures = []
-    max_attempts = 500
-    attempts = 0
-    while len(chosen_failures) < n_failures and attempts < max_attempts:
-        attempts += 1
-        idx = rng.randint(0, len(eligible))
-        candidate = eligible[idx]
-
-        # Ensure no overlap with existing failure windows (precursor + burst)
-        too_close = any(
-            abs((candidate - f).days) < min_gap
-            for f in chosen_failures
-        )
-        if too_close:
-            continue
-
-        chosen_failures.append(candidate)
-
-    for failure_start in chosen_failures:
-        duration = int(rng.randint(1, failure_max_duration + 1))
-        burst_rate = int(rng.randint(10, 26))
-
-        # Precursor window: [failure_start - precursor_days, failure_start - 1]
-        precursor_start = failure_start - datetime.timedelta(days=precursor_days)
-        for i in range(precursor_days):
-            d = precursor_start + datetime.timedelta(days=i)
-            if d in set(all_dates):
-                precursor_progress[d] = i / precursor_days
-
-        # Active failure window
-        for i in range(duration):
-            d = failure_start + datetime.timedelta(days=i)
-            if d in set(all_dates):
-                failure_dates.add(d)
-                failure_volume[d] = burst_rate
-
-    return precursor_progress, failure_dates, failure_volume
 
 
 def _init_date_range(date_range, start_date_str, years):
@@ -202,81 +93,56 @@ def _init_date_range(date_range, start_date_str, years):
     return date_range
 
 
+def _determine_leak_start_dt(date_range, has_leakage_prob, history_df=None):
+    """
+    Determines if a persistent leakage occurs.
+
+    If history_df is provided and indicates an ongoing leak, the leakage is carried over.
+    Otherwise, a new leak start timestamp is selected probabilistically within date_range.
+    """
+    # 1. Check if history already has an active leakage state
+    if history_df is not None and not history_df.empty:
+        if 'is_leakage' in history_df.columns and history_df['is_leakage'].iloc[-1]:
+            # Leakage was active at the end of history buffer; carry it forward
+            return date_range[0]
+
+    # 2. Sample new leakage start if probability triggers
+    if has_leakage_prob > 0 and np.random.rand() < has_leakage_prob and len(date_range) > 0:
+        leak_idx = np.random.randint(0, len(date_range))
+        return date_range[leak_idx]
+
+    return None
+
+
 def _iter_hourly(
-    date_range, anchor_date, vacation_days, home_holiday_days, has_leakage,
+    date_range, anchor_date, vacation_days, home_holiday_days, leak_start_dt,
     weekday_profile, weekend_profile, weekday_activity_prob, weekend_activity_prob,
     softener_cycle, softener_offset, softener_hours, softener_volumes, softener_jitter,
     seasonal_amplitude, noise_fraction,
     extra_absence_check=None,
-    precursor_progress=None,
-    failure_dates=None,
-    failure_volume=None,
 ):
-    softener_split = {}  # date → (vol_hour0, vol_hour1) rolled once per cycle
+    softener_split = {}
 
     for dt in date_range:
+        has_leakage = (leak_start_dt is not None) and (dt >= leak_start_dt)
         hour = dt.hour
         is_weekend = dt.dayofweek >= 5
         days_since_anchor = (dt.date() - anchor_date).days
 
-        # --- Pressure ---
-        night_boost = 0.15 if (hour >= 23 or hour <= 5) else 0.0
-        base_pressure = 3.2 + night_boost
-
-        progress = precursor_progress.get(dt.date(), 0.0) if precursor_progress else 0.0
-        is_failure = bool(failure_dates and dt.date() in failure_dates)
-
-        if is_failure:
-            pressure = round(np.random.uniform(1.4, 2.0), 2)
-        elif progress > 0:
-            pressure = base_pressure + 0.35 * progress
-            hammer_prob = 0.02 + 0.06 * progress
-            if np.random.rand() < hammer_prob:
-                pressure += np.random.uniform(0.3, 0.8)
-            pressure += np.random.normal(0, 0.08)
-            pressure = round(max(1.0, pressure), 2)
-        else:
-            pressure = base_pressure + np.random.normal(0, 0.10)
-            if np.random.rand() < 0.02:
-                pressure += np.random.uniform(0.3, 0.8)
-            pressure = round(max(1.0, pressure), 2)
-
-        # --- Temperature (Belgian climate, seasonal + diurnal) ---
-        seasonal_temp = 11.0 + 8.5 * np.cos(2 * np.pi * (dt.month - 7) / 12)
-        diurnal = 2.5 * np.cos(2 * np.pi * (hour - 14) / 24)
-        temperature = round(seasonal_temp + diurnal + np.random.normal(0, 1.2), 1)
-
-        # --- Label ---
-        if is_failure:
-            leak_label = 2
-        elif progress > 0:
-            leak_label = 1
-        else:
-            leak_label = 0
-
-        # --- Water softener (runs regardless of failure/precursor) ---
-        if days_since_anchor % softener_cycle == softener_offset and hour in softener_hours:
+        if softener_cycle > 0 and days_since_anchor % softener_cycle == softener_offset and hour in softener_hours:
             idx = softener_hours.index(hour)
             if idx == 0:
                 jitter = np.random.randint(*softener_jitter)
                 total = sum(softener_volumes) + jitter
-                v0 = round(total * softener_volumes[0] / sum(softener_volumes))
+                v0 = round(total * softener_volumes[0] / max(1, sum(softener_volumes)))
                 softener_split[dt.date()] = (v0, total - v0)
-            volume = softener_split[dt.date()][idx]
-            if is_failure and failure_volume:
-                volume += failure_volume.get(dt.date(), 0)
-            yield dt, volume, pressure, temperature, leak_label
+            yield dt, softener_split[dt.date()][idx], has_leakage
             continue
 
-        # --- Vacation ---
         if dt.date() in vacation_days:
-            base = _sample_leakage_volume() if has_leakage else 0
-            if is_failure and failure_volume:
-                base += failure_volume.get(dt.date(), 0)
-            yield dt, base, pressure, temperature, leak_label
+            yield dt, _sample_leakage_volume() if has_leakage else 0, has_leakage
             continue
 
-        # Belgian public holidays treated like weekends: people are home
         is_weekend_like = is_weekend or (dt.date() in home_holiday_days)
         prob_profile = weekend_activity_prob if is_weekend_like else weekday_activity_prob
         vol_profile = weekend_profile if is_weekend_like else weekday_profile
@@ -287,99 +153,90 @@ def _iter_hourly(
             is_active = False
 
         if not is_active:
-            volume = _sample_leakage_volume() if has_leakage else 0
+            yield dt, _sample_leakage_volume() if has_leakage else 0, has_leakage
         else:
             base_volume = vol_profile[hour]
             if base_volume == 0.0:
-                volume = _sample_leakage_volume() if has_leakage else 0
+                yield dt, _sample_leakage_volume() if has_leakage else 0, has_leakage
             else:
                 seasonal_factor = 1.0 + seasonal_amplitude * np.cos(2 * np.pi * (dt.month - 7) / 12)
-                vol = base_volume * seasonal_factor
-                noise = np.random.normal(0, max(0.5, vol * noise_fraction))
-                volume = round(max(1, vol + noise))
-
-        if is_failure and failure_volume:
-            volume += failure_volume.get(dt.date(), 0)
-
-        yield dt, volume, pressure, temperature, leak_label
+                volume = base_volume * seasonal_factor
+                noise = np.random.normal(0, max(0.5, volume * noise_fraction))
+                yield dt, round(max(1, volume + noise)), has_leakage
 
 
 def _to_dataframe(iter_fn, household_id, stream):
     if stream:
-        return (
-            pd.DataFrame({
-                'Timestamp': [dt], 'Volume_Liter': [vol], 'pressure_bar': [pressure],
-                'temperature_c': [temperature], 'leak_label': [label],
-                'household_id': household_id,
-            })
-            for dt, vol, pressure, temperature, label in iter_fn()
-        )
-    timestamps, volumes, pressures, temperatures, labels = [], [], [], [], []
-    for dt, vol, pressure, temperature, label in iter_fn():
+        return (pd.DataFrame({
+            'timestamp': [dt],
+            'volume_liter': [vol],
+            'household_id': household_id,
+            'is_leakage': [is_leak]
+        }) for dt, vol, is_leak in iter_fn())
+
+    timestamps, volumes, leaks = [], [], []
+    for dt, vol, is_leak in iter_fn():
         timestamps.append(dt)
         volumes.append(vol)
-        pressures.append(pressure)
-        temperatures.append(temperature)
-        labels.append(label)
+        leaks.append(is_leak)
+
     return pd.DataFrame({
-        'Timestamp': timestamps,
-        'Volume_Liter': volumes,
-        'pressure_bar': pressures,
-        'temperature_c': temperatures,
-        'leak_label': labels,
+        'timestamp': timestamps,
+        'volume_liter': volumes,
         'household_id': household_id,
+        'is_leakage': leaks
     })
 
 
-def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, seed=42, household_id='couple_1', vacation_probability=0.05, has_leakage=False, n_failures=0, precursor_days=14, stream=False):
-    """
-    Generates synthetic water consumption for a couple.
-    Can generate an arbitrary interval (even 1 single hour) or a default 2-year range.
-
-    :param date_range: Explicit pd.DatetimeIndex to generate data for. If None, uses start_date_str and years.
-    :param start_date_str: Start date for default generation if date_range is None.
-    :param years: Duration in years for default generation if date_range is None.
-    :param seed: Random seed for reproducibility. Set to None to disable.
-    :param household_id: Identifier for this household instance, used as a label in the output DataFrame.
-    :param vacation_probability: Daily probability that all household members are absent (0.0-1.0). On vacation days, human consumption is zero; the water softener still runs on its timer.
-    :param has_leakage: If True, a small leakage volume replaces every zero, day and night, simulating a continuous pipe/meter leak.
-    :param n_failures: Number of simulated pipe burst events. Each event has a precursor window (pressure drift, more hammer spikes) followed by an active failure (pressure collapse, elevated volume). Default 0 = clean data.
-    :param precursor_days: Days before each failure where precursor signals appear in pressure_bar. Default 14.
-    :param stream: If False (default), returns a complete DataFrame. If True, returns a generator that yields one single-row DataFrame per hour.
-    """
+def generate_couple_water_consumption(
+    date_range=None, start_date_str="2024-01-01", years=2, seed=42,
+    household_id="couple_be", vacation_probability=0.05, has_leakage_prob=0.0,
+    stream=False, country="be", history_buffer_df=None
+):
     date_range = _init_date_range(date_range, start_date_str, years)
     if seed is not None:
         np.random.seed(seed)
-    # Anchor date to keep track of the water softener's cycle accurately over time
-    anchor_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d").date()
-    vacation_days, home_holiday_days = _build_vacation_days(date_range, vacation_probability, seed)
-    precursor_progress, failure_dates, failure_volume = _build_failure_events(
-        date_range, vacation_days, n_failures, precursor_days, seed
-    )
 
-    # Average volume (L) when active. Hours 1-4 are 0.0 to model deep sleep: no consumption expected.
-    # Zero-profile hours that still fire is_active (rare, due to low but non-zero probabilities) are
-    # handled by the base_volume == 0.0 guard in _iter_hourly, preventing noise from inflating them to >= 1 L.
-    # Weekday 9-15h is low: both adults are at work.
-    weekday_profile = {
-        0: 1.5, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 1.5,
-        6: 4.0, 7: 5.0, 8: 4.0, 9: 1.5, 10: 1.5, 11: 1.5,
-        12: 2.5, 13: 1.5, 14: 1.5, 15: 2.0, 16: 3.5, 17: 5.0,
-        18: 6.0, 19: 6.5, 20: 8.0, 21: 6.5, 22: 3.5, 23: 1.5
-    }
+    anchor_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d").date()
+    vacation_days, home_holiday_days = _build_vacation_days(date_range, vacation_probability, seed, country)
+    leak_start_dt = _determine_leak_start_dt(date_range, has_leakage_prob, history_buffer_df)
+
+    if country.lower() == "nl":
+        weekday_profile = {
+            0: 1.5, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 1.5,
+            6: 4.0, 7: 5.0, 8: 4.0, 9: 1.5, 10: 1.5, 11: 1.5,
+            12: 2.5, 13: 1.5, 14: 1.5, 15: 2.0, 16: 4.5, 17: 8.0,
+            18: 6.5, 19: 5.0, 20: 3.5, 21: 2.5, 22: 2.0, 23: 1.0
+        }
+        weekday_activity_prob = {
+            0: 0.20, 1: 0.02, 2: 0.01, 3: 0.00, 4: 0.00, 5: 0.15,
+            6: 0.70, 7: 0.75, 8: 0.60, 9: 0.15, 10: 0.10, 11: 0.10,
+            12: 0.25, 13: 0.15, 14: 0.10, 15: 0.20, 16: 0.70, 17: 0.85,
+            18: 0.85, 19: 0.70, 20: 0.50, 21: 0.40, 22: 0.30, 23: 0.15
+        }
+        softener_cycle = 14
+        softener_offset = 5
+    else:
+        weekday_profile = {
+            0: 1.5, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 1.5,
+            6: 4.0, 7: 5.0, 8: 4.0, 9: 1.5, 10: 1.5, 11: 1.5,
+            12: 2.5, 13: 1.5, 14: 1.5, 15: 2.0, 16: 3.5, 17: 5.0,
+            18: 6.0, 19: 6.5, 20: 8.0, 21: 6.5, 22: 3.5, 23: 1.5
+        }
+        weekday_activity_prob = {
+            0: 0.20, 1: 0.02, 2: 0.01, 3: 0.00, 4: 0.00, 5: 0.15,
+            6: 0.70, 7: 0.75, 8: 0.60, 9: 0.15, 10: 0.10, 11: 0.10,
+            12: 0.25, 13: 0.15, 14: 0.10, 15: 0.15, 16: 0.50, 17: 0.65,
+            18: 0.85, 19: 0.85, 20: 0.85, 21: 0.75, 22: 0.55, 23: 0.30
+        }
+        softener_cycle = 7
+        softener_offset = 11
+
     weekend_profile = {
         0: 2.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 1.5,
         6: 5.5, 7: 5.0, 8: 5.0, 9: 7.0, 10: 9.5, 11: 10.5,
         12: 11.0, 13: 9.5, 14: 8.5, 15: 6.0, 16: 2.5, 17: 2.5,
         18: 2.5, 19: 3.5, 20: 8.5, 21: 5.5, 22: 4.0, 23: 2.0
-    }
-    # Probability of ANY water activity happening in that hour.
-    # Weekday 9-15h: very low — both adults at work.
-    weekday_activity_prob = {
-        0: 0.20, 1: 0.02, 2: 0.01, 3: 0.00, 4: 0.00, 5: 0.15,
-        6: 0.70, 7: 0.75, 8: 0.60, 9: 0.15, 10: 0.10, 11: 0.10,
-        12: 0.25, 13: 0.15, 14: 0.10, 15: 0.15, 16: 0.50, 17: 0.65,
-        18: 0.85, 19: 0.85, 20: 0.85, 21: 0.75, 22: 0.55, 23: 0.30
     }
     weekend_activity_prob = {
         0: 0.25, 1: 0.02, 2: 0.01, 3: 0.00, 4: 0.00, 5: 0.10,
@@ -390,68 +247,66 @@ def generate_couple_water_consumption(date_range=None, start_date_str="2024-01-0
 
     return _to_dataframe(
         lambda: _iter_hourly(
-            date_range, anchor_date, vacation_days, home_holiday_days, has_leakage,
+            date_range, anchor_date, vacation_days, home_holiday_days, leak_start_dt,
             weekday_profile, weekend_profile, weekday_activity_prob, weekend_activity_prob,
-            softener_cycle=7, softener_offset=11, softener_hours=[3, 4],
+            softener_cycle=softener_cycle, softener_offset=softener_offset, softener_hours=[3, 4],
             softener_volumes=(24, 40), softener_jitter=(-2, 3),
-            # Peaks in July: couples use more water in summer (garden, outdoor activities).
-            # Noise std dev is lowest for couples (10%): two-person routine is more predictable.
-            # Ordering across types: couple (10%) < family (15%) < single (20%).
             seasonal_amplitude=0.2, noise_fraction=0.10,
-            precursor_progress=precursor_progress,
-            failure_dates=failure_dates,
-            failure_volume=failure_volume,
         ),
         household_id, stream,
     )
 
-
-def generate_family_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, seed=42, household_id='family_1', vacation_probability=0.05, has_leakage=False, n_failures=0, precursor_days=14, stream=False):
-    """
-    Generates synthetic water consumption for a family.
-    Can generate an arbitrary interval (even 1 single hour) or a default 2-year range.
-
-    :param date_range: Explicit pd.DatetimeIndex to generate data for. If None, uses start_date_str and years.
-    :param start_date_str: Start date for default generation if date_range is None.
-    :param years: Duration in years for default generation if date_range is None.
-    :param seed: Random seed for reproducibility. Set to None to disable.
-    :param household_id: Identifier for this household instance, used as a label in the output DataFrame.
-    :param vacation_probability: Daily probability that all household members are absent (0.0-1.0). On vacation days, human consumption is zero; the water softener still runs on its timer.
-    :param has_leakage: If True, a small leakage volume replaces every zero, day and night, simulating a continuous pipe/meter leak.
-    :param n_failures: Number of simulated pipe burst events. Each event has a precursor window (pressure drift, more hammer spikes) followed by an active failure (pressure collapse, elevated volume). Default 0 = clean data.
-    :param precursor_days: Days before each failure where precursor signals appear in pressure_bar. Default 14.
-    :param stream: If False (default), returns a complete DataFrame. If True, returns a generator that yields one single-row DataFrame per hour.
-    """
+def generate_family_water_consumption(
+    date_range=None, start_date_str="2024-01-01", years=2, seed=42,
+    household_id="family_be", vacation_probability=0.05, has_leakage_prob=0.0,
+    stream=False, country="be", history_buffer_df=None
+):
     date_range = _init_date_range(date_range, start_date_str, years)
     if seed is not None:
         np.random.seed(seed)
-    # Anchor date to keep track of the water softener's cycle accurately over time
-    anchor_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d").date()
-    vacation_days, home_holiday_days = _build_vacation_days(date_range, vacation_probability, seed)
-    precursor_progress, failure_dates, failure_volume = _build_failure_events(
-        date_range, vacation_days, n_failures, precursor_days, seed
-    )
 
-    # Hours 1-4 are 0.0: deep sleep, no consumption expected.
-    # Weekday 9-14h is low: parents at work, children at school. Hour 15 spikes: kids return.
-    weekday_profile = {
-        0: 2.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 2.5,
-        6: 8.0, 7: 25.0, 8: 14.0, 9: 3.0, 10: 2.5, 11: 2.5,
-        12: 5.0, 13: 3.0, 14: 2.5, 15: 10.0, 16: 16.0, 17: 24.0,
-        18: 28.0, 19: 25.0, 20: 16.0, 21: 10.0, 22: 5.0, 23: 3.0
-    }
+    anchor_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d").date()
+    vacation_days, home_holiday_days = _build_vacation_days(date_range, vacation_probability, seed, country)
+    leak_start_dt = _determine_leak_start_dt(date_range, has_leakage_prob, history_buffer_df)
+
+    if country.lower() == "nl":
+        # Dutch family profile: Earlier dinner peak (17:00-18:00)
+        weekday_profile = {
+            0: 2.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 2.5,
+            6: 8.0, 7: 25.0, 8: 14.0, 9: 3.0, 10: 2.5, 11: 2.5,
+            12: 5.0, 13: 3.0, 14: 2.5, 15: 12.0, 16: 22.0, 17: 28.0,
+            18: 24.0, 19: 16.0, 20: 10.0, 21: 6.0, 22: 4.0, 23: 2.0
+        }
+        weekday_activity_prob = {
+            0: 0.25, 1: 0.02, 2: 0.01, 3: 0.00, 4: 0.00, 5: 0.20,
+            6: 0.85, 7: 0.95, 8: 0.80, 9: 0.25, 10: 0.20, 11: 0.20,
+            12: 0.35, 13: 0.25, 14: 0.20, 15: 0.80, 16: 0.95, 17: 0.95,
+            18: 0.90, 19: 0.80, 20: 0.65, 21: 0.50, 22: 0.35, 23: 0.20
+        }
+        softener_cycle = 8
+        softener_offset = 2
+    else:
+        # Belgian family profile: Later dinner peak (18:00-20:00)
+        weekday_profile = {
+            0: 2.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 2.5,
+            6: 8.0, 7: 25.0, 8: 14.0, 9: 3.0, 10: 2.5, 11: 2.5,
+            12: 5.0, 13: 3.0, 14: 2.5, 15: 10.0, 16: 16.0, 17: 24.0,
+            18: 28.0, 19: 25.0, 20: 16.0, 21: 10.0, 22: 5.0, 23: 3.0
+        }
+        weekday_activity_prob = {
+            0: 0.25, 1: 0.02, 2: 0.01, 3: 0.00, 4: 0.00, 5: 0.20,
+            6: 0.85, 7: 0.95, 8: 0.80, 9: 0.25, 10: 0.20, 11: 0.20,
+            12: 0.35, 13: 0.25, 14: 0.20, 15: 0.75, 16: 0.85, 17: 0.95,
+            18: 0.95, 19: 0.95, 20: 0.90, 21: 0.80, 22: 0.60, 23: 0.40
+        }
+        softener_cycle = 4
+        softener_offset = 3
+
     weekend_profile = {
         0: 3.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 1.5,
         6: 4.0, 7: 8.0, 8: 16.0, 9: 22.0, 10: 26.0, 11: 25.0,
         12: 24.0, 13: 20.0, 14: 18.0, 15: 16.0, 16: 18.0, 17: 20.0,
         18: 24.0, 19: 22.0, 20: 18.0, 21: 12.0, 22: 7.0, 23: 4.0
-    }
-    # Weekday 9-14h: low activity — house empty during school/work hours.
-    weekday_activity_prob = {
-        0: 0.25, 1: 0.02, 2: 0.01, 3: 0.00, 4: 0.00, 5: 0.20,
-        6: 0.85, 7: 0.95, 8: 0.80, 9: 0.25, 10: 0.20, 11: 0.20,
-        12: 0.35, 13: 0.25, 14: 0.20, 15: 0.75, 16: 0.85, 17: 0.95,
-        18: 0.95, 19: 0.95, 20: 0.90, 21: 0.80, 22: 0.60, 23: 0.40
     }
     weekend_activity_prob = {
         0: 0.35, 1: 0.02, 2: 0.01, 3: 0.00, 4: 0.00, 5: 0.10,
@@ -462,66 +317,67 @@ def generate_family_water_consumption(date_range=None, start_date_str="2024-01-0
 
     return _to_dataframe(
         lambda: _iter_hourly(
-            date_range, anchor_date, vacation_days, home_holiday_days, has_leakage,
+            date_range, anchor_date, vacation_days, home_holiday_days, leak_start_dt,
             weekday_profile, weekend_profile, weekday_activity_prob, weekend_activity_prob,
-            # Family uses a larger softener unit: 40 L + 60 L per regeneration cycle (vs. 24+40 L for couple/single).
-            softener_cycle=4, softener_offset=3, softener_hours=[2, 3],
+            softener_cycle=softener_cycle, softener_offset=softener_offset, softener_hours=[2, 3],
             softener_volumes=(40, 60), softener_jitter=(-3, 4),
-            # Peaks in July: families use significantly more water in summer (children home, garden, pool).
-            # Noise std dev 15%: more variable than couple (more occupants, less predictable overlap).
             seasonal_amplitude=0.25, noise_fraction=0.15,
-            precursor_progress=precursor_progress,
-            failure_dates=failure_dates,
-            failure_volume=failure_volume,
         ),
         household_id, stream,
     )
 
 
-def generate_single_water_consumption(date_range=None, start_date_str="2024-01-01", years=2, seed=42, household_id='single_1', vacation_probability=0.05, has_leakage=False, n_failures=0, precursor_days=14, stream=False):
-    """
-    Generates synthetic water consumption for a single-person household.
-    Can generate an arbitrary interval (even 1 single hour) or a default 2-year range.
-
-    :param date_range: Explicit pd.DatetimeIndex to generate data for. If None, uses start_date_str and years.
-    :param start_date_str: Start date for default generation if date_range is None.
-    :param years: Duration in years for default generation if date_range is None.
-    :param seed: Random seed for reproducibility. Set to None to disable.
-    :param household_id: Identifier for this household instance, used as a label in the output DataFrame.
-    :param vacation_probability: Daily probability that the household member is absent (0.0-1.0). On vacation days, human consumption is zero; the water softener still runs on its timer.
-    :param has_leakage: If True, a small leakage volume replaces every zero, day and night, simulating a continuous pipe/meter leak.
-    :param n_failures: Number of simulated pipe burst events. Each event has a precursor window (pressure drift, more hammer spikes) followed by an active failure (pressure collapse, elevated volume). Default 0 = clean data.
-    :param precursor_days: Days before each failure where precursor signals appear in pressure_bar. Default 14.
-    :param stream: If False (default), returns a complete DataFrame. If True, returns a generator that yields one single-row DataFrame per hour.
-    """
+def generate_single_water_consumption(
+    date_range=None, start_date_str="2024-01-01", years=2, seed=42,
+    household_id="single_be", vacation_probability=0.05, has_leakage_prob=0.0,
+    stream=False, country="be", history_buffer_df=None
+):
     date_range = _init_date_range(date_range, start_date_str, years)
     if seed is not None:
         np.random.seed(seed)
-    # Anchor date to keep track of the water softener's cycle accurately over time
-    anchor_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d").date()
-    vacation_days, home_holiday_days = _build_vacation_days(date_range, vacation_probability, seed)
-    precursor_progress, failure_dates, failure_volume = _build_failure_events(
-        date_range, vacation_days, n_failures, precursor_days, seed
-    )
 
-    # Hours 1-5 (weekday) and 2-5 (weekend) are 0.0: deep sleep, no consumption expected.
-    weekday_profile = {
-        0: 2.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0,
-        6: 3.0, 7: 10.0, 8: 4.0, 9: 2.0, 10: 2.0, 11: 2.0,
-        12: 3.0, 13: 2.0, 14: 2.0, 15: 2.0, 16: 3.0, 17: 6.0,
-        18: 8.0, 19: 9.0, 20: 7.0, 21: 6.0, 22: 4.0, 23: 2.5
-    }
+    anchor_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d").date()
+    vacation_days, home_holiday_days = _build_vacation_days(date_range, vacation_probability, seed, country)
+    leak_start_dt = _determine_leak_start_dt(date_range, has_leakage_prob, history_buffer_df)
+
+    if country.lower() == "nl":
+        # Dutch single profile: Peak water activity shifted earlier (17:00-18:30)
+        weekday_profile = {
+            0: 2.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0,
+            6: 3.0, 7: 10.0, 8: 4.0, 9: 2.0, 10: 2.0, 11: 2.0,
+            12: 3.0, 13: 2.0, 14: 2.0, 15: 2.0, 16: 5.0, 17: 9.0,
+            18: 8.0, 19: 6.0, 20: 4.0, 21: 3.0, 22: 2.0, 23: 1.5
+        }
+        weekday_activity_prob = {
+            0: 0.08, 1: 0.02, 2: 0.01, 3: 0.00, 4: 0.00, 5: 0.02,
+            6: 0.35, 7: 0.80, 8: 0.50, 9: 0.10, 10: 0.05, 11: 0.05,
+            12: 0.15, 13: 0.05, 14: 0.05, 15: 0.10, 16: 0.50, 17: 0.85,
+            18: 0.80, 19: 0.60, 20: 0.40, 21: 0.30, 22: 0.20, 23: 0.10
+        }
+        softener_cycle = 20
+        softener_offset = 10
+    else:
+        # Belgian single profile: Peak water activity later (18:30-20:00)
+        weekday_profile = {
+            0: 2.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0,
+            6: 3.0, 7: 10.0, 8: 4.0, 9: 2.0, 10: 2.0, 11: 2.0,
+            12: 3.0, 13: 2.0, 14: 2.0, 15: 2.0, 16: 3.0, 17: 6.0,
+            18: 8.0, 19: 9.0, 20: 7.0, 21: 6.0, 22: 4.0, 23: 2.5
+        }
+        weekday_activity_prob = {
+            0: 0.08, 1: 0.02, 2: 0.01, 3: 0.00, 4: 0.00, 5: 0.02,
+            6: 0.35, 7: 0.80, 8: 0.50, 9: 0.10, 10: 0.05, 11: 0.05,
+            12: 0.15, 13: 0.05, 14: 0.05, 15: 0.05, 16: 0.20, 17: 0.65,
+            18: 0.80, 19: 0.85, 20: 0.75, 21: 0.65, 22: 0.45, 23: 0.20
+        }
+        softener_cycle = 12
+        softener_offset = 23
+
     weekend_profile = {
         0: 3.0, 1: 2.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0,
         6: 2.0, 7: 2.0, 8: 4.0, 9: 7.0, 10: 10.0, 11: 9.0,
         12: 8.0, 13: 6.0, 14: 5.0, 15: 4.0, 16: 4.0, 17: 5.0,
         18: 6.0, 19: 7.0, 20: 8.0, 21: 7.0, 22: 5.0, 23: 3.0
-    }
-    weekday_activity_prob = {
-        0: 0.08, 1: 0.02, 2: 0.01, 3: 0.00, 4: 0.00, 5: 0.02,
-        6: 0.35, 7: 0.80, 8: 0.50, 9: 0.10, 10: 0.05, 11: 0.05,
-        12: 0.15, 13: 0.05, 14: 0.05, 15: 0.05, 16: 0.20, 17: 0.65,
-        18: 0.80, 19: 0.85, 20: 0.75, 21: 0.65, 22: 0.45, 23: 0.20
     }
     weekend_activity_prob = {
         0: 0.15, 1: 0.08, 2: 0.02, 3: 0.00, 4: 0.00, 5: 0.01,
@@ -530,9 +386,6 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
         18: 0.65, 19: 0.75, 20: 0.80, 21: 0.70, 22: 0.55, 23: 0.30
     }
 
-    # Single-only: 20% chance of being out all daytime on a given weekend day (shopping, sports, social).
-    # Rolled once per weekend day so absence spans the whole 9-21h block, not per-hour flickering.
-    # Intentionally absent from couple/family, it serves as an ML-differentiating feature.
     rng_absence = np.random.RandomState((seed if seed is not None else 0) + 7)
     single_daytime_off_days = {
         d.date() for d in date_range
@@ -544,147 +397,12 @@ def generate_single_water_consumption(date_range=None, start_date_str="2024-01-0
 
     return _to_dataframe(
         lambda: _iter_hourly(
-            date_range, anchor_date, vacation_days, home_holiday_days, has_leakage,
+            date_range, anchor_date, vacation_days, home_holiday_days, leak_start_dt,
             weekday_profile, weekend_profile, weekday_activity_prob, weekend_activity_prob,
-            softener_cycle=12, softener_offset=23, softener_hours=[3, 4],
+            softener_cycle=softener_cycle, softener_offset=softener_offset, softener_hours=[3, 4],
             softener_volumes=(24, 40), softener_jitter=(-1, 2),
-            # Peaks in July: minor summer uptick (more showers, drinking water).
-            # Amplitude is small (0.1) since a single person has no garden or pool effect.
-            # Noise std dev is highest for singles (20%): irregular lifestyle produces most variability.
             seasonal_amplitude=0.1, noise_fraction=0.20,
             extra_absence_check=_single_absence,
-            precursor_progress=precursor_progress,
-            failure_dates=failure_dates,
-            failure_volume=failure_volume,
         ),
         household_id, stream,
     )
-
-
-def _build_daily_features(df):
-    """
-    Aggregates hourly readings into per-day features for leak detection.
-    Night hours (1-4) are the deep-sleep window: any non-zero flow there is suspicious.
-    """
-    df = df.copy()
-    df['date'] = df['Timestamp'].dt.date
-    df['hour'] = df['Timestamp'].dt.hour
-    df['is_night'] = df['hour'].between(1, 4)
-
-    daily = df.groupby('date')['Volume_Liter'].agg(
-        total_daily_volume='sum',
-        zero_ratio_all=lambda s: (s == 0).mean(),
-    ).reset_index()
-
-    night = df[df['is_night']].groupby('date')['Volume_Liter'].agg(
-        night_min='min',
-        night_mean='mean',
-        night_zero_ratio=lambda s: (s == 0).mean(),
-    ).reset_index()
-
-    day = df[~df['is_night']].groupby('date')['Volume_Liter'].min().rename('day_min').reset_index()
-
-    features = daily.merge(night, on='date', how='left').merge(day, on='date', how='left')
-    features['rolling_7d_night_min'] = features['night_min'].rolling(7, min_periods=1).min()
-    return features
-
-
-_ISOLATION_FOREST_FEATURE_COLS = [
-    'night_min', 'night_zero_ratio', 'night_mean',
-    'rolling_7d_night_min', 'day_min', 'total_daily_volume', 'zero_ratio_all',
-]
-
-
-def _train_isolation_forest(features, contamination=0.01):
-    model = IsolationForest(contamination=contamination, random_state=42)
-    model.fit(features[_ISOLATION_FOREST_FEATURE_COLS])
-    return model
-
-
-def _detect_leak_isolation_forest(model, features):
-    scores = model.decision_function(features[_ISOLATION_FOREST_FEATURE_COLS])  # lower = more anomalous
-    predictions = model.predict(features[_ISOLATION_FOREST_FEATURE_COLS])       # -1 = anomaly, 1 = normal
-    features = features.copy()
-    features['anomaly_score'] = scores
-    features['is_anomaly'] = predictions == -1
-    return features
-
-
-def _zero_gap_heuristic(df, night_hours=(1, 4), window_days=3, threshold=0):
-    """
-    A slow drip keeps the meter ticking continuously, so once no zero-hour shows up
-    within a rolling window of consecutive nights, a leak is likely.
-    """
-    night = df[df['Timestamp'].dt.hour.between(*night_hours)].copy()
-    night['date'] = night['Timestamp'].dt.date
-    daily_min = night.groupby('date')['Volume_Liter'].min()
-    rolling_min = daily_min.rolling(window_days, min_periods=1).min()
-    return (rolling_min > threshold).rename('zero_gap_flag').reset_index()
-
-
-# =====================================================================
-# DEMONSTRATIE: HOE DE FLEXIBELE FUNCTIES TE GEBRUIKEN
-# =====================================================================
-
-if __name__ == "__main__":
-    # CASE 1: Genereer de standaard historische dataset van 2 jaar (Default)
-    couple_2years_df = generate_couple_water_consumption()
-    print(f"Case 1 (Standaard 2 jaar) aantal rijen: {len(couple_2years_df)}")
-    print(f"  Columns: {list(couple_2years_df.columns)}")
-    print(f"  Label distribution: {couple_2years_df['leak_label'].value_counts().to_dict()}")
-
-    # CASE 2: Genereer exact 1 enkel datapunt voor het volgende uur (bijv. live streaming / realtime voorspelling)
-    next_hour_index = pd.date_range(start="2026-01-01 14:00:00", end="2026-01-01 14:00:00", freq='h')
-    single_datapoint_df = generate_couple_water_consumption(date_range=next_hour_index)
-    print("\nCase 2 (1 specifiek uur):")
-    print(single_datapoint_df)
-
-    # CASE 3: Genereer een specifiek aangepast interval (bijvoorbeeld exact 1 specifieke week)
-    custom_week_index = pd.date_range(start="2025-06-01 00:00:00", end="2025-06-07 23:00:00", freq='h')
-    week_df = generate_family_water_consumption(date_range=custom_week_index)
-    print(f"\nCase 3 (1 specifieke week in de toekomst) aantal rijen: {len(week_df)}")
-
-    # CASE 4: Iteratieve modus: voeg 1 uur per keer toe aan de dataframe (stream=True)
-    hourly_index = pd.date_range(start="2026-06-01 00:00:00", periods=5, freq='h')
-    gen = generate_single_water_consumption(date_range=hourly_index, stream=True)
-    accumulated = pd.DataFrame()
-    print("\nCase 4 (Iteratief, 1 uur per keer):")
-    for hourly_df in gen:
-        accumulated = pd.concat([accumulated, hourly_df], ignore_index=True)
-        print(accumulated.tail(1).to_string(index=False))
-
-    # CASE 5: Failure precursor simulation — 2 failures over 2 years, 14-day precursor window
-    print("\nCase 5 (Failure precursor simulation, n_failures=2):")
-    failure_df = generate_couple_water_consumption(n_failures=2, precursor_days=14)
-    label_counts = failure_df['leak_label'].value_counts().sort_index()
-    print(f"  Label distribution: {label_counts.to_dict()}")
-
-    for label, name in [(0, 'normal'), (1, 'precursor'), (2, 'active failure')]:
-        subset = failure_df[failure_df['leak_label'] == label]
-        if len(subset) > 0:
-            print(f"  [{name}] mean pressure={subset['pressure_bar'].mean():.2f} bar  "
-                  f"mean volume={subset['Volume_Liter'].mean():.1f} L  "
-                  f"mean temp={subset['temperature_c'].mean():.1f} °C")
-
-    print(f"\n  Sample temperature range: Jan mean={failure_df[failure_df['Timestamp'].dt.month == 1]['temperature_c'].mean():.1f}°C  "
-          f"Jul mean={failure_df[failure_df['Timestamp'].dt.month == 7]['temperature_c'].mean():.1f}°C")
-
-    # CASE 6: Isolation Forest (unusual consumption patterns) + zero-gap heuristic (continuous drip),
-    # trained on one clean year and evaluated on one year with a simulated continuous leak.
-    print("\nCase 6 (Isolation Forest + zero-gap heuristic leak detection, 1 year train / 1 year test):")
-
-    clean_year_df = generate_couple_water_consumption(start_date_str="2025-01-01", years=1, seed=100, has_leakage=False)
-    leaky_year_df = generate_couple_water_consumption(start_date_str="2026-01-01", years=1, seed=200, has_leakage=True)
-
-    train_features = _build_daily_features(clean_year_df)
-    test_features = _build_daily_features(leaky_year_df)
-
-    forest = _train_isolation_forest(train_features)
-    test_scored = _detect_leak_isolation_forest(forest, test_features)
-    test_scored = test_scored.merge(_zero_gap_heuristic(leaky_year_df), on='date', how='left')
-    test_scored['combined_flag'] = test_scored['is_anomaly'] | test_scored['zero_gap_flag']
-
-    n_days = len(test_scored)
-    print(f"  Days flagged by Isolation Forest:  {test_scored['is_anomaly'].sum()} / {n_days}")
-    print(f"  Days flagged by zero-gap heuristic: {test_scored['zero_gap_flag'].sum()} / {n_days}")
-    print(f"  Days flagged by either (combined):  {test_scored['combined_flag'].sum()} / {n_days}")
