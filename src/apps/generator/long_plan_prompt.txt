@@ -1,0 +1,28 @@
+(switch to new branch: more-households)
+
+Propose an implementation plan for this:
+
+Currently there is a data generation script in @/generator/main.py
+This script will generate new time series data on the fly and stores it in a hypertable.
+For the current table creation see @/database/init.sql
+However, currently we only generate and store the time series data for 1 household.
+
+The models that can be used are stored in @/generator/models.
+
+Plan of action:
+* Use @/generator/generate_training_data.py for generating the data instead of what is currently in /generator/main.py.
+So put everything from generator/generate_training_data.py into generator/main.py.
+* Adjust table creation and columns in init.sql accordingly and do so that this data is stored as efficiently as possible.
+Also make sure that the column names match the ones in the dataframes in generate_training_data.py.
+* Load the models from the @models folder at startup.
+* Instead of generating data for 1 household, generate it for 6 households with the following characteristics:
+  * household_id: single_be, single_nl, couple_be, couple_nl, family_be, family_nl
+    You can see a full example in @/generator/inference_example.py.
+* At startup first check if there is data in the database, if not put for 6 households hourly data in the database starting from 2024-01-01 00:00:00 until the last passed hour of the current time. This makes sure the database has initial data to start from.
+Also make sure that for each hour there is a water leak detection. Do this based on the example in inference_example.py and use Python for this, do NOT put it in init.sql!
+* Fill gaps when the last datapoint per household stored in the database is not matching the last hour passsed.
+e.g.: if the current time is now 17:30 the last datapoint per household stored in the database should be 17:00 today.
+So instead of generating a current datapoint, all the missing datapoints in between will be added as well.
+
+* TODO: op de 2 puntjes aangeven dat er voor de 6 huishoudens met de leak probability wat gespeeld mag worden (voorbeelden halen uit Kaggle notebook)
+* TODO: Grafana visualisation of 6 households
