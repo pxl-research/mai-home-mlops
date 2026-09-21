@@ -34,6 +34,9 @@ docker-compose down
 ```
 
 ## Exploring the data
+- NOTE:  It's expected that only `single_be` has data right after the build; the generator backfills households one at a time (sequentially through `HOUSEHOLD_IDS`, each doing a ~2-year hourly backfill), and only writes to the DB once a household's full backfill finishes, so `single_nl`, `couple_be`, etc. will appear progressively as each one completes. Check `docker-compose logs generator` to see which household it's currently working on.
+Note that this can take a long time the first time the project is being build and run!
+
 
 - **Grafana**: open `localhost:3000`, log in with `admin`/`admin`. The "Household Water Usage Overview" dashboard has a `household` selector (pick one or "All" to stack all 6) and overlays leak-detection status (`has_leakage`) as red bars on top of the consumption line.
 - **API**: `GET http://localhost:8000/data?household_id=family_be&limit=100`

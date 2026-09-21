@@ -477,28 +477,37 @@ def load_detectors():
 
 def generate_and_predict(household_id, seed, timestamps, detector, history_buffer_df, has_leakage_prob):
     """
-    Generates one row per timestamp for household_id, runs the leak detector on each row as it
-    is produced (matching inference_example.py's streaming pattern), and returns the combined
-    prediction rows plus the updated history buffer for continuity across future calls.
+    Generates a row per timestamp for household_id and runs the leak detector on each row as it
+    is produced, returning the combined prediction rows plus the updated history buffer for
+    continuity across future calls.
+
+    All timestamps are produced from a single streaming call to the generation function, so
+    per-range setup (vacation days, public holidays, leak start) is computed once instead of
+    once per hour -- important for backfilling months/years of history in one go -- while still
+    yielding one row at a time so the detector's 24h buffer is fed sequentially.
     """
+    if len(timestamps) == 0:
+        return pd.DataFrame(), history_buffer_df
+
     category = household_category(household_id)
     country = household_country(household_id)
     generation_func = GENERATION_FUNCTIONS[category]
 
-    prediction_rows = []
-    for ts in timestamps:
-        single_row_df = next(generation_func(
-            date_range=[ts],
-            start_date_str=ts.strftime("%Y-%m-%d"),
-            seed=seed,
-            household_id=household_id,
-            vacation_probability=0.05,
-            has_leakage_prob=has_leakage_prob,
-            stream=True,
-            country=country,
-            history_buffer_df=history_buffer_df,
-        ))
+    row_generator = generation_func(
+        date_range=list(timestamps),
+        start_date_str=timestamps[0].strftime("%Y-%m-%d"),
+        seed=seed,
+        household_id=household_id,
+        vacation_probability=0.05,
+        has_leakage_prob=has_leakage_prob,
+        stream=True,
+        country=country,
+        history_buffer_df=history_buffer_df,
+    )
 
+    total = len(timestamps)
+    prediction_rows = []
+    for i, single_row_df in enumerate(row_generator, start=1):
         prediction_df = detector.predict_hourly(single_row_df, use_isolation_forest=True)
         prediction_df["is_leakage"] = single_row_df["is_leakage"].iloc[0]
         prediction_rows.append(prediction_df)
@@ -507,8 +516,8 @@ def generate_and_predict(household_id, seed, timestamps, detector, history_buffe
         if len(history_buffer_df) > HISTORY_BUFFER_MAX_HOURS:
             history_buffer_df = history_buffer_df.iloc[-HISTORY_BUFFER_MAX_HOURS:].reset_index(drop=True)
 
-    if not prediction_rows:
-        return pd.DataFrame(), history_buffer_df
+        if total > 2000 and i % 2000 == 0:
+            print(f"[startup]   {household_id}: {i}/{total} hours generated")
 
     return pd.concat(prediction_rows, ignore_index=True), history_buffer_df
 
@@ -516,10 +525,22 @@ def generate_and_predict(household_id, seed, timestamps, detector, history_buffe
 async def insert_rows(cur, rows_df):
     if rows_df.empty:
         return
-    records = list(rows_df[[
-        "timestamp", "household_id", "volume_liter", "is_leakage",
-        "is_leak", "zero_gap_anomaly", "isolation_forest_anomaly", "predicted",
-    ]].itertuples(index=False, name=None))
+    records = [
+        (
+            row.timestamp.to_pydatetime() if hasattr(row.timestamp, "to_pydatetime") else row.timestamp,
+            str(row.household_id),
+            float(row.volume_liter),
+            bool(row.is_leakage),
+            bool(row.is_leak),
+            bool(row.zero_gap_anomaly),
+            bool(row.isolation_forest_anomaly),
+            bool(row.predicted),
+        )
+        for row in rows_df[[
+            "timestamp", "household_id", "volume_liter", "is_leakage",
+            "is_leak", "zero_gap_anomaly", "isolation_forest_anomaly", "predicted",
+        ]].itertuples(index=False)
+    ]
     await cur.executemany(INSERT_SQL, records)
 
 
@@ -629,8 +650,11 @@ async def main():
             ) as conn:
                 history_buffers = await startup_sync(conn, detectors)
                 await hourly_loop(conn, detectors, history_buffers)
-        except Exception as e:
+        except psycopg.OperationalError as e:
             print(f"Waiting for DB... {e}")
+            await asyncio.sleep(2)
+        except Exception as e:
+            print(f"Generator error, retrying: {e!r}")
             await asyncio.sleep(2)
 
 

@@ -8,8 +8,16 @@
         "label": "Household",
         "type": "custom",
         "query": "single_be,single_nl,couple_be,couple_nl,family_be,family_nl",
-        "current": { "text": "All", "value": "$__all" },
-        "options": [],
+        "current": { "text": ["All"], "value": ["$__all"] },
+        "options": [
+          { "text": "All", "value": "$__all" },
+          { "text": "single_be", "value": "single_be" },
+          { "text": "single_nl", "value": "single_nl" },
+          { "text": "couple_be", "value": "couple_be" },
+          { "text": "couple_nl", "value": "couple_nl" },
+          { "text": "family_be", "value": "family_be" },
+          { "text": "family_nl", "value": "family_nl" }
+        ],
         "includeAll": true,
         "multi": true
       }
@@ -46,13 +54,13 @@
         {
           "datasource": { "type": "postgres", "uid": "P12345678" },
           "format": "time_series",
-          "rawSql": "SELECT timestamp AS \"time\", volume_liter FROM household_water_usage WHERE household_id = '$household' AND $__timeFilter(timestamp) ORDER BY 1",
+          "rawSql": "SELECT timestamp AS \"time\", volume_liter FROM household_water_usage WHERE household_id IN (${household:sqlstring}) AND $__timeFilter(timestamp) ORDER BY 1",
           "refId": "A"
         },
         {
           "datasource": { "type": "postgres", "uid": "P12345678" },
           "format": "time_series",
-          "rawSql": "SELECT timestamp AS \"time\", has_leakage::int AS has_leakage FROM household_water_usage WHERE household_id = '$household' AND $__timeFilter(timestamp) ORDER BY 1",
+          "rawSql": "SELECT timestamp AS \"time\", has_leakage::int AS has_leakage FROM household_water_usage WHERE household_id IN (${household:sqlstring}) AND $__timeFilter(timestamp) ORDER BY 1",
           "refId": "B"
         }
       ]
