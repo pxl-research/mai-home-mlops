@@ -1,14 +1,12 @@
 # MAI Home MLOps pipeline
 
-Currently loose experiments which will turn into a fully working MLOps pipeline on Azure, taking IaC from Happy@Home when applicable.
-
-The only part that is currently runnable end-to-end is the local simulation stack under `src/apps/` — a TimescaleDB-backed pipeline that simulates hourly water consumption for 6 households, runs leak detection on it, and visualizes it in Grafana. Everything else (Azure infra, DVC, Kubeflow/Metaflow, InfluxDB, model registry, ...) is future/in-progress work and has been moved to the [Appendix](#appendix-future--in-progress-infrastructure).
+This project is part of **MAI-HOME**, an Interreg Flanders–Netherlands initiative that uses AI to combat energy poverty and reduce CO₂ emissions in housing. Renovating homes alone rarely delivers the expected CO₂ savings, partly because undetected water leaks cause hidden structural damage and drive up costs for both housing corporations and tenants. Predicting *when* a leak will occur is unreliable, since water usage alone can't distinguish a real leak from a legitimate spike (a filled bathtub, a long shower, a stuck toilet flush) without extra signals like pipe pressure or acoustics. This project instead focuses on *detecting* leaks as they happen (e.g. water that keeps flowing uninterrupted for hours at night), which is a far more robust signal than forecasting. To demonstrate this, the repo simulates hourly water consumption for 6 households and runs it through an anomaly-detection model (isolation forest + a "zero usage per day" heuristic) to flag leaks in near real time, all stored efficiently in a TimescaleDB hypertable and visualized per household in Grafana with a leak-detection overlay. The synthetic generator is designed to later be swapped for a real, non-synthetic household data stream without changing the rest of the pipeline.
 
 ## What you need installed
 
 - [Docker](https://docs.docker.com/engine/install/) and Docker Compose (Docker Desktop on Windows/Mac, or `docker-compose-plugin` on Linux)
 
-That's it for running the local stack — everything else (Python, Postgres/TimescaleDB, Grafana) runs inside containers.
+That's it for running the local stack; everything else (Python, Postgres/TimescaleDB, Grafana) runs inside containers.
 
 ## Running the local stack
 
@@ -22,7 +20,7 @@ This starts 4 services:
 | Service     | What it does                                                                                                   | Exposed at                     |
 |-------------|-------------------------------------------------------------------------------------------------------------------|---------------------------------|
 | `database`  | TimescaleDB (Postgres) hypertable `household_water_usage`                                                        | `localhost:5432`                |
-| `generator` | Simulates hourly water usage for 6 households (`single_be`, `single_nl`, `couple_be`, `couple_nl`, `family_be`, `family_nl`), runs each hour through a pre-trained leak-detection model, and writes the result to the database. On first run it backfills from `2024-01-01 00:00` up to the last completed hour; on restart it fills any gap since the last stored datapoint, then generates one new row per household every hour. | —                                |
+| `generator` | Simulates hourly water usage for 6 households (`single_be`, `single_nl`, `couple_be`, `couple_nl`, `family_be`, `family_nl`), runs each hour through a pre-trained leak-detection model, and writes the result to the database. On first run it backfills from `2024-01-01 00:00` up to the last completed hour; on restart it fills any gap since the last stored datapoint, then generates one new row per household every hour. | n/a                              |
 | `api`       | FastAPI read endpoint over the data                                                                              | `localhost:8000/data`           |
 | `dashboard` | Grafana, pre-provisioned with the TimescaleDB datasource and a household water-usage dashboard                  | `localhost:3000` (`admin`/`admin`) |
 
@@ -62,11 +60,11 @@ src/apps/
 
 ## Appendix: future / in-progress infrastructure
 
-Everything below is not currently wired up to the local stack above — it documents planned/experimental Azure infrastructure, orchestration, and MLOps tooling.
+Everything below is not currently wired up to the local stack above; it documents planned/experimental Azure infrastructure, orchestration, and MLOps tooling.
 
 ### TODO
 
-* Only use Azure Blob Storage or ADLS for backup (save InfluxDB data locally in a volume in the container on the VM and let InfluxDB handle the rest). Configuring InfluxDB 3.0 to use Azure Blob Storage as long-term persistence with a local cache on the VM for real-time operations is a core feature of its architecture — a hybrid approach combining fast local storage for recent data with cost-effective, scalable object storage for historical data.
+* Only use Azure Blob Storage or ADLS for backup (save InfluxDB data locally in a volume in the container on the VM and let InfluxDB handle the rest). Configuring InfluxDB 3.0 to use Azure Blob Storage as long-term persistence with a local cache on the VM for real-time operations is a core feature of its architecture: a hybrid approach combining fast local storage for recent data with cost-effective, scalable object storage for historical data.
   https://www.influxdata.com/blog/azure-blob-storage-influxdb/
   Then use DVC on the object store (not on the VM).
   ```
