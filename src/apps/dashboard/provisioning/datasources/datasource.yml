@@ -6,7 +6,6 @@ datasources:
     uid: P12345678
     url: database:5432
     user: postgres
-    # ADD THIS LINE:
     database: postgres
     secureJsonData:
       password: password
