@@ -2,6 +2,8 @@
 
 This project is part of **MAI-HOME**, an Interreg Flanders–Netherlands initiative that uses AI to combat energy poverty and reduce CO₂ emissions in housing. Renovating homes alone rarely delivers the expected CO₂ savings, partly because undetected water leaks cause hidden structural damage and drive up costs for both housing corporations and tenants. Predicting *when* a leak will occur is unreliable, since water usage alone can't distinguish a real leak from a legitimate spike (a filled bathtub, a long shower, a stuck toilet flush) without extra signals like pipe pressure or acoustics. This project instead focuses on *detecting* leaks as they happen (e.g. water that keeps flowing uninterrupted for hours at night), which is a far more robust signal than forecasting. To demonstrate this, the repo simulates hourly water consumption for 6 households and runs it through an anomaly-detection model (isolation forest + a "zero usage per day" heuristic) to flag leaks in near real time, all stored efficiently in a TimescaleDB hypertable and visualized per household in Grafana with a leak-detection overlay. The synthetic generator is designed to later be swapped for a real, non-synthetic household data stream without changing the rest of the pipeline.
 
+As a reference: in the `notebooks` folder there is a Jupyter Notebook containing model training code for all households based on synthetic data of 2 years (to encapture seasonality).
+
 ## What you need installed
 
 - [Docker](https://docs.docker.com/engine/install/) and Docker Compose (Docker Desktop on Windows/Mac, or `docker-compose-plugin` on Linux)
