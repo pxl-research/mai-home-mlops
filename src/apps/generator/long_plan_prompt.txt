@@ -23,6 +23,30 @@ Also make sure that for each hour there is a water leak detection. Do this based
 * Fill gaps when the last datapoint per household stored in the database is not matching the last hour passsed.
 e.g.: if the current time is now 17:30 the last datapoint per household stored in the database should be 17:00 today.
 So instead of generating a current datapoint, all the missing datapoints in between will be added as well.
+* New data should be generated each hour of the day for each of the 6 households.
+* When generating the 6 households, vary the has_leakage_prob a bit but make it consistent for each household.
+One household should have 0.0, another 0.5, another 0.4, another 0.3, another 0.2, another 0.1.
+* Update the Grafana dashboard implementation in `@/dashboard` to accommodate multi-household time series data and display water leak detection status:
+1. **Multi-Household Support:**
+   - Instead of displaying a single graph, update the dashboard to visualize water consumption over time for all 6 households: `single_be`, `single_nl`, `couple_be`, `couple_nl`, `family_be`, and `family_nl`.
+   - Provide a way to either view all 6 households side-by-side / stacked, or allow filtering/switching between specific households via a selector control.
 
-* TODO: op de 2 puntjes aangeven dat er voor de 6 huishoudens met de leak probability wat gespeeld mag worden (voorbeelden halen uit Kaggle notebook)
-* TODO: Grafana visualisation of 6 households
+2. **Leak Detection Overlay:**
+   - For each household's time series chart, overlay the water leak detection status (binary values: `0` for no leakage, `1` for leakage).
+   - Use a contrasting color or distinct visual element (e.g., a secondary y-axis line, shaded background regions/bars, or distinct markers) so the leak events (0 vs. 1) are immediately distinguishable from the continuous water consumption curve.
+
+3. **Data Fetching Adjustments:**
+   - Update API calls/queries fetching data from the database to query by `household_id` and include both consumption metrics and the `has_leakage` status columns.
+
+
+
+-----------------
+   Verification
+
+1. `docker-compose down -v && docker-compose up --build` from `src/apps/`.
+2. Confirm `generator` logs show model loading, then backfill progress (2024-01-01 → now) for all 6 households, then hourly-loop heartbeat messages.
+3. `psql`/Grafana "Explore": `SELECT household_id, count(*), max(timestamp) FROM household_water_usage GROUP BY household_id;` — expect 6 rows, `max(timestamp)` equal to the current hour floor for all.
+4. Wait past the next top-of-hour (or temporarily shrink the sleep for a manual test) and confirm exactly one new row per household appears.
+5. Restart the `generator` container mid-hour and confirm gap-fill inserts only the missing hours per household, not duplicates (PK on `(household_id, timestamp)` also guards against duplicate-insert errors surfacing bugs).
+6. Open Grafana (`localhost:3000`, admin/admin), confirm the `household` variable selector appears, panels repeat per household, and leak periods render as a visually distinct overlay (force one by temporarily setting a household's `HAS_LEAKAGE_PROB` high, or just observe `couple_nl`/`family_nl` at 0.3/0.5).
+7. Hit `http://localhost:8000/data?household_id=family_be` and confirm filtered JSON with the new columns.
