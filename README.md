@@ -14,7 +14,7 @@ That's it for running the local stack; everything else (Python, Postgres/Timesca
 
 ```
 cd src/apps
-docker-compose up --build
+docker compose up -d --build
 ```
 
 This starts 4 services:
@@ -28,11 +28,11 @@ This starts 4 services:
 
 Stop and wipe all data (fresh backfill on next start):
 ```
-docker-compose down -v
+docker compose down -v
 ```
 Stop but keep data:
 ```
-docker-compose down
+docker compose down
 ```
 
 ## Exploring the data
